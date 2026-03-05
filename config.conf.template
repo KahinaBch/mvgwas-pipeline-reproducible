@@ -92,7 +92,47 @@ GENOME_BUILD="GRCh38"
 #   GRCh37: https://ftp.ncbi.nih.gov/snp/latest_release/VCF/GCF_000001405.25.gz
 DBSNP_VCF=""
 
-# ── Post-processing parameters (Steps IV-V) ───────────────────────────────────
+# ── Enrichment analysis (Step V) ────────────────────────────────────────────
+# Set to true to SKIP the GWAS Catalog mapping + MAGMA gene enrichment step.
+# By default (false) the step runs automatically after post-processing.
+SKIP_ENRICHMENT=false
+
+# ── GWAS Catalog options ──────────────────────────────────────────────────────
+# Number of top lead SNPs (one per locus) to query in the EBI GWAS Catalog.
+GWAS_CATALOG_TOP_N=20
+# Locus clumping window — SNPs within this distance on the same chr are merged
+# into one locus and only the lead (lowest-P) SNP is queried. (kb)
+GWAS_CATALOG_CLUMP_KB=500
+# Region-context window: catalog variants within ±this distance of each lead SNP
+# are listed as biological context. (kb)
+GWAS_CATALOG_WINDOW_KB=500
+
+# ── MAGMA gene / gene-set enrichment ─────────────────────────────────────────
+# Path to the MAGMA binary.  Leave empty to auto-detect from PATH.
+MAGMA_PATH=""
+
+# Directory containing MAGMA reference files:
+#   NCBI38.gene.loc  (gene coordinates + symbols)
+#   g1000_eur.bed / .bim / .fam  (1000G European LD reference panel)
+# Download from: https://ctg.cncr.nl/software/magma
+MAGMA_REF_DIR=""
+
+# Directory containing MSigDB gene-set .gmt files (Entrez IDs):
+#   h.all.*.Hs.entrez.gmt    — Hallmark (50 sets)
+#   c2.all.*.Hs.entrez.gmt   — Curated pathways (KEGG, Reactome, WikiPathways …)
+#   c5.all.*.Hs.entrez.gmt   — GO Biological Process + Human Phenotype Ontology
+# Download from: https://www.gsea-msigdb.org/gsea/downloads.jsp
+# Leave empty to skip gene-set analysis (gene-based test still runs).
+MAGMA_GENESETS_DIR=""
+
+# Sample size N passed to MAGMA gene-based test.
+# If empty the pipeline tries to read it from run_stats.tsv (written by Step II).
+MAGMA_SAMPLE_N=""
+
+# Up/downstream window (kb) for SNP→gene annotation in MAGMA (default: 10).
+MAGMA_GENE_WINDOW_KB=10
+
+# ── Post-processing parameters (Steps IV-VI) ──────────────────────────────────
 # Number of top SNPs (by P_manta) to extract and annotate
 TOP_N_SNPS=1000
 

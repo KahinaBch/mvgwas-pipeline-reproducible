@@ -3,8 +3,9 @@
 An automated, reproducible pipeline wrapper for
 [KahinaBch/mvgwas-nf](https://github.com/KahinaBch/mvgwas-nf) (branch `kb/dsl2-conversion`).
 
-Performs five sequential steps: environment setup → input QC → chromosome-parallel GWAS
-execution → post-processing (top SNPs, rsID, Manhattan/QQ/Regional plots) → report generation.
+Performs six sequential steps: environment setup → input QC → chromosome-parallel GWAS
+execution → post-processing (top SNPs, rsID, Manhattan/QQ/Regional plots) →
+enrichment analysis (GWAS Catalog mapping + MAGMA gene/gene-set test) → report generation.
 
 ---
 ## Quick overview
@@ -80,8 +81,31 @@ OUTPUT_DIR/
 │
 ├── <RUN_NAME>_run_metadata.txt      # Key=value store of all runtime paths & stats
 ├── run_stats.tsv                    # Tab-separated summary statistics table
-├── <RUN_NAME>_report.md             ← Step V — human-readable run report
-└── <RUN_NAME>_report.html           ← Step V — same report as standalone HTML
+├── gwas_catalog/                    ← Step V-A — GWAS Catalog mapping
+│   ├── combined/
+│   │   ├── gwas_catalog_combined.md   # Markdown report per locus
+│   │   └── gwas_catalog_combined.tsv  # TSV summary (lead SNPs + catalog hits)
+│   ├── male/   (if SEX_STRATIFIED)
+│   └── female/ (if SEX_STRATIFIED)
+│
+├── magma/                           ← Step V-B — MAGMA enrichment
+│   ├── combined/
+│   │   ├── input/snp_loc.txt         # SNP CHR BP for --annotate
+│   │   ├── input/pval.txt            # SNP P for --pval
+│   │   ├── output/<RUN>_combined.genes.out   # gene-based results
+│   │   ├── output/<RUN>_combined_h.gsa.out   # Hallmark gene-set results
+│   │   ├── output/<RUN>_combined_c2.gsa.out  # C2 curated pathway results
+│   │   ├── output/<RUN>_combined_c5.gsa.out  # C5 GO+HPO results
+│   │   ├── plots/gene_manhattan.png
+│   │   ├── plots/hallmark_barplot.png
+│   │   ├── plots/c2_bubbleplot.png
+│   │   ├── plots/c5_barplot.png
+│   │   └── top_genes.tsv / top_genesets_*.tsv
+│   ├── male/   (if SEX_STRATIFIED)
+│   └── female/ (if SEX_STRATIFIED)
+│
+├── <RUN_NAME>_report.md             ← Step VI — human-readable run report
+└── <RUN_NAME>_report.html           ← Step VI — same report as standalone HTML
 ```
 
 ---
@@ -137,7 +161,7 @@ Options:
 
 ---
 
-## Five Pipeline Steps
+## Six Pipeline Steps
 
 ### Step I — Environment & Self-Test
 - Checks all required tools (java, nextflow, bcftools, bgzip, tabix, Rscript, python3)
@@ -184,7 +208,28 @@ Options:
   - **QQ plot** — observed vs. expected −log₁₀(P) with lambda GC
   - **Regional Manhattan** — ±`REGIONAL_WINDOW` bp around the top locus, with UCSC gene track
 
-### Step V — Report Generation
+### Step V — Enrichment Analysis *(on by default; skip with `--skip-enrichment`)*
+
+#### 5A — GWAS Catalog mapping
+- Clusters top SNPs into loci (configurable clumping window, default 500 kb per chr)
+- Picks the lead SNP (lowest p-value) per locus and queries the [EBI GWAS Catalog](https://www.ebi.ac.uk/gwas) REST API:
+  - **Direct SNP associations** — whether the exact rsID has ever been reported
+  - **Region context** — any catalog variants within ±500 kb (biological context)
+- Writes a per-stratum Markdown report + TSV summary to `gwas_catalog/<stratum>/`
+- Handles offline / rate-limited scenarios gracefully (writes a placeholder report)
+
+#### 5B — MAGMA gene & gene-set enrichment
+- Prepares MAGMA input files (SNP-location + p-value) from the merged results
+- Annotates SNPs → genes (`magma --annotate`, default ±10 kb window)
+- Runs the gene-based association test (`snp-wise=mean` model)
+- Optionally runs gene-set analyses against three MSigDB collections
+  (when `MAGMA_GENESETS_DIR` is set):
+  - **Hallmark** (50 gene sets)
+  - **C2** curated pathways (KEGG, Reactome, WikiPathways …)
+  - **C5** GO Biological Process + Human Phenotype Ontology
+- Produces four plots and summary TSVs in `magma/<stratum>/plots/`
+
+### Step VI — Report Generation
 - Aggregates all intermediate results, QC reports, and statistics
 - Produces a comprehensive **Markdown** report (+ **HTML** via pandoc or built-in fallback)
 - Sections: executive summary, run config, step-by-step QC details, top loci table, embedded plots, full pipeline log tail
@@ -205,6 +250,14 @@ SEX_STRATIFIED=false          # true to run male + female + combined
 SEX_COL=""                    # sex column in covariate file (auto-detected if empty)
 SEX_MALE_CODE=""              # e.g. 1, M, male  (auto-detected if empty)
 SEX_FEMALE_CODE=""            # e.g. 2, F, female (auto-detected if empty)
+
+# === Enrichment analysis (Step V) ===
+SKIP_ENRICHMENT=false         # true to skip GWAS Catalog + MAGMA entirely
+GWAS_CATALOG_TOP_N=20         # top lead SNPs to query
+MAGMA_PATH=""                 # path to magma binary (auto-detect if empty)
+MAGMA_REF_DIR=""              # dir with NCBI38.gene.loc + g1000_eur.*
+MAGMA_GENESETS_DIR=""         # dir with MSigDB .gmt files (skip gene-sets if empty)
+MAGMA_SAMPLE_N=""             # sample N for MAGMA (auto-read from run_stats if empty)
 
 # === Genotype input format ===
 # Set to 'plink' to convert PLINK binary files to VCF automatically.

@@ -3,12 +3,14 @@
 # run.sh  —  mvgwas-pipeline: Automated multivariate GWAS runner
 # =============================================================================
 #
-# Five-step pipeline:
+# Six-step pipeline:
 #   I.   Environment setup and pipeline self-test (skippable)
 #   II.  Input format validation and individual harmonisation
 #   III. mvgwas-nf execution (per-chromosome parallel) + output QC
 #   IV.  Top-SNP extraction, rsID annotation, Manhattan/QQ/regional plots
-#   V.   Comprehensive final report
+#   V.   Enrichment analysis: GWAS Catalog mapping + MAGMA gene/gene-set test
+#          (runs by default; skip with --skip-enrichment or SKIP_ENRICHMENT=true)
+#   VI.  Comprehensive final report
 #
 # Usage:
 #   bash run.sh --config <config.conf> [options]
@@ -17,10 +19,12 @@
 #   --config  <file>            Configuration file (default: config.conf)
 #   --skip-test                 Skip Step I (environment + pipeline test)
 #   --build   GRCh37|GRCh38    Override genome build for rsID annotation
-#   --steps   <list>            Run only these steps, e.g. "2,3,4" (default: 1-5)
+#   --steps   <list>            Run only these steps, e.g. "2,3,4" (default: 1-6)
 #   --resume                    Skip steps that already have a checkpoint
 #   --dry-run                   Print commands without executing
 #   --verbose                   Enable debug-level logging
+#   --skip-enrichment           Skip Step V (GWAS Catalog + MAGMA)
+#   --sex-stratified            Run sex-stratified analysis (male/female/combined)
 #   --help                      Show this message and exit
 #
 # Examples:
@@ -43,10 +47,11 @@ source "${SCRIPT_DIR}/lib/utils.sh"
 CONFIG_FILE="${SCRIPT_DIR}/config.conf"
 SKIP_TEST=false
 BUILD_OVERRIDE=""
-STEPS_TO_RUN="1,2,3,4,5"
+STEPS_TO_RUN="1,2,3,4,5,6"
 RESUME=false
 DRY_RUN=false
 VERBOSE=false
+SKIP_ENRICHMENT=false
 
 # ── Parse command-line arguments ──────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -57,8 +62,10 @@ while [[ $# -gt 0 ]]; do
         --steps)     STEPS_TO_RUN="$2";     shift 2 ;;
         --resume)    RESUME=true;           shift   ;;
         --dry-run)   DRY_RUN=true;          shift   ;;
-        --verbose)          VERBOSE=true;          shift   ;;
-        --sex-stratified)   SEX_STRATIFIED=true;   shift   ;;
+        --verbose)           VERBOSE=true;          shift   ;;
+        --sex-stratified)    SEX_STRATIFIED=true;   shift   ;;
+        --skip-enrichment)   SKIP_ENRICHMENT=true;  shift   ;;
+        --no-enrichment)     SKIP_ENRICHMENT=true;  shift   ;;
         --help|-h)
             grep '^#' "${BASH_SOURCE[0]}" | head -40 | sed 's/^# \{0,1\}//'
             exit 0
@@ -78,7 +85,7 @@ source "${CONFIG_FILE}"
 
 # Apply overrides
 [ -n "${BUILD_OVERRIDE}" ] && GENOME_BUILD="${BUILD_OVERRIDE}"
-export DRY_RUN VERBOSE SEX_STRATIFIED
+export DRY_RUN VERBOSE SEX_STRATIFIED SKIP_ENRICHMENT
 
 # ── Validate mandatory config keys ───────────────────────────────────────────
 _check_config() {
@@ -125,6 +132,7 @@ log_info ""
     echo "PIPELINE_DIR=${PIPELINE_DIR}"
     echo "SEX_STRATIFIED=${SEX_STRATIFIED:-false}"
     echo "SEX_COL=${SEX_COL:-}"
+    echo "SKIP_ENRICHMENT=${SKIP_ENRICHMENT:-false}"
 } > "${OUTPUT_DIR}/${RUN_NAME}_run_metadata.txt"
 
 # Initialise run_stats.tsv
@@ -204,9 +212,67 @@ if should_run_step 4; then
     record_stat "step4_completed" "$(date '+%Y-%m-%d %H:%M:%S')"
 fi
 
-# ── STEP V: Report generation ─────────────────────────────────────────────────
+# ── STEP V: Enrichment analysis (GWAS Catalog + MAGMA) ───────────────────────
 if should_run_step 5; then
-    log_step 5 "Comprehensive report generation"
+    # Allow config or CLI flag to skip enrichment
+    # Config file is already sourced; SKIP_ENRICHMENT may have been set there.
+    if [ "${SKIP_ENRICHMENT:-false}" = "true" ]; then
+        log_step 5 "Enrichment analysis — SKIPPED (SKIP_ENRICHMENT=true)"
+    else
+        log_step 5 "Enrichment analysis: GWAS Catalog mapping + MAGMA"
+        read -ra STRATA_ARR_V <<< "${STRATA:-combined}"
+        mkdir -p "${OUTPUT_DIR}/logs"
+
+        for STRATUM in "${STRATA_ARR_V[@]}"; do
+            log_section "  [Step V] Stratum: ${STRATUM}"
+            STRATUM_UC=$(echo "${STRATUM}" | tr 'a-z' 'A-Z')
+
+            # ── 5A. GWAS Catalog mapping ──────────────────────────────────────
+            # Resolve annotated (rsID) top-SNPs file for this stratum
+            if [ "${STRATUM}" = "combined" ]; then
+                eval "_TOP_FILE=\"\${ANNOTATED_SNPS:-\${TOP_SNPS:-}}\""
+            else
+                eval "_TOP_FILE=\"\${ANNOTATED_SNPS_${STRATUM_UC}:-\${TOP_SNPS_${STRATUM_UC}:-}}\""
+            fi
+
+            CATALOG_DIR="${OUTPUT_DIR}/gwas_catalog/${STRATUM}"
+            mkdir -p "${CATALOG_DIR}"
+
+            if [ -n "${_TOP_FILE:-}" ] && [ -f "${_TOP_FILE}" ]; then
+                log_info "  [5A] GWAS Catalog mapping [${STRATUM}]"
+                python3 "${SCRIPT_DIR}/scripts/05_gwas_catalog.py" \
+                    --top-snps   "${_TOP_FILE}" \
+                    --output-dir "${CATALOG_DIR}" \
+                    --run-name   "${RUN_NAME}" \
+                    --stratum    "${STRATUM}" \
+                    --pval-col   "${PVAL_COL:-P_manta}" \
+                    --top-n      "${GWAS_CATALOG_TOP_N:-20}" \
+                    --clump-kb   "${GWAS_CATALOG_CLUMP_KB:-500}" \
+                    --window-kb  "${GWAS_CATALOG_WINDOW_KB:-500}" \
+                    2>&1 | tee -a "${OUTPUT_DIR}/logs/gwas_catalog_${STRATUM}.log"
+
+                echo "GWAS_CATALOG_REPORT_${STRATUM_UC}=${CATALOG_DIR}/gwas_catalog_${STRATUM}.md" \
+                    >> "${META_FILE}"
+                log_ok "  [5A] GWAS Catalog done → ${CATALOG_DIR}/gwas_catalog_${STRATUM}.md"
+            else
+                log_warn "  [5A] No annotated SNPs file for stratum '${STRATUM}' — skipping GWAS Catalog"
+                log_warn "       Run Step IV first, or check that rsID annotation succeeded."
+            fi
+
+            # ── 5B. MAGMA ─────────────────────────────────────────────────────
+            log_info "  [5B] MAGMA gene/gene-set enrichment [${STRATUM}]"
+            bash "${SCRIPT_DIR}/scripts/05_magma.sh" "${STRATUM}" \
+                2>&1 | tee -a "${OUTPUT_DIR}/logs/magma_${STRATUM}.log"
+        done
+    fi
+    checkpoint_set 5
+    log_milestone "Step V complete — enrichment analyses done"
+    record_stat "step5_completed" "$(date '+%Y-%m-%d %H:%M:%S')"
+fi
+
+# ── STEP VI: Report generation ────────────────────────────────────────────────
+if should_run_step 6; then
+    log_step 6 "Comprehensive report generation"
     python3 "${SCRIPT_DIR}/scripts/05_generate_report.py" \
         --output-dir    "${OUTPUT_DIR}" \
         --run-name      "${RUN_NAME}" \
@@ -216,9 +282,9 @@ if should_run_step 5; then
         --sug-thresh    "${SUG_THRESH:-1e-5}" \
         --config-file   "${CONFIG_FILE}" \
         --log-file      "${PIPELINE_LOG}"
-    checkpoint_set 5
-    log_milestone "Step V complete — report written"
-    record_stat "step5_completed" "$(date '+%Y-%m-%d %H:%M:%S')"
+    checkpoint_set 6
+    log_milestone "Step VI complete — report written"
+    record_stat "step6_completed" "$(date '+%Y-%m-%d %H:%M:%S')"
 fi
 
 # ── Final summary ─────────────────────────────────────────────────────────────
@@ -226,8 +292,10 @@ record_stat "end_time"    "$(date '+%Y-%m-%d %H:%M:%S')"
 record_stat "elapsed"     "$(elapsed)"
 
 log_banner "Pipeline complete!  Run: ${RUN_NAME}  |  Elapsed: $(elapsed)"
-log_info "Results : ${OUTPUT_DIR}/"
-log_info "Report  : ${OUTPUT_DIR}/${RUN_NAME}_report.md"
-log_info "Log     : ${PIPELINE_LOG}"
+log_info "Results    : ${OUTPUT_DIR}/"
+log_info "Report     : ${OUTPUT_DIR}/${RUN_NAME}_report.md"
+log_info "GWAS Cat.  : ${OUTPUT_DIR}/gwas_catalog/"
+log_info "MAGMA      : ${OUTPUT_DIR}/magma/"
+log_info "Log        : ${PIPELINE_LOG}"
 log_info ""
 log_ok "All done."
