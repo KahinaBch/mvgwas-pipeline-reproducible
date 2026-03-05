@@ -1,0 +1,114 @@
+# =============================================================================
+# config.conf.template  —  Configuration for mvgwas-pipeline
+# =============================================================================
+# Copy this file to e.g. "my_analysis.conf" and fill in the paths below.
+# Then run:  bash run.sh --config my_analysis.conf
+#
+# All paths can be absolute or relative to the directory where run.sh is called.
+# =============================================================================
+
+# ── Run identity ──────────────────────────────────────────────────────────────
+# A short alphanumeric name for this analysis run (used in filenames and report)
+RUN_NAME="mvgwas_run1"
+
+# ── Input files ───────────────────────────────────────────────────────────────
+# Genotype: bgzipped, tabix-indexed VCF/BCF (multi-sample).
+VCF_FILE=""
+
+# Phenotype: tab-separated, first column = sample ID (header required).
+#   Each additional column is one phenotype.
+PHENOTYPE_FILE=""
+
+# Covariate: tab-separated, first column = sample ID (header required).
+#   Each additional column is one covariate.
+COVARIATE_FILE=""
+
+# ── Output ────────────────────────────────────────────────────────────────────
+# Directory where all results will be written. Will be created if absent.
+OUTPUT_DIR="./results"
+
+# ── mvgwas-nf pipeline location ───────────────────────────────────────────────
+# Path to your local clone of KahinaBch/mvgwas-nf (kb/dsl2-conversion branch).
+PIPELINE_DIR="/Users/kahina/NGB/mvgwas-nf"
+
+# GitHub repo if you want to pull the latest version instead of using a local clone.
+# Leave empty to use PIPELINE_DIR.
+PIPELINE_REPO=""          # e.g. "KahinaBch/mvgwas-nf"
+PIPELINE_BRANCH="kb/dsl2-conversion"
+
+# ── Pipeline parameters ───────────────────────────────────────────────────────
+# Variants tested per chunk (Nextflow --l parameter)
+CHUNK_SIZE=500
+
+# Phenotype transformation: none | sqrt | log
+TRANSFORMATION="none"
+
+# Test for interaction with a covariate: none | <covariate_name>
+INTERACTION="none"
+
+# Minimum number of individuals per genotype group
+MIN_INDIVIDUALS=10
+
+# Chromosomes to process (space-separated; default: 1-22)
+CHROMOSOMES="1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22"
+
+# ── Container runtime ─────────────────────────────────────────────────────────
+# How to run the MANTA container: singularity | docker | none
+CONTAINER="singularity"
+
+# ── Genome build for rsID annotation (Step IV) ───────────────────────────────
+# GRCh37 or GRCh38
+GENOME_BUILD="GRCh38"
+
+# Path to a local dbSNP VCF (bgzipped + tabix-indexed).
+# If empty, the pipeline will query NCBI FTP remotely (slower but no download needed).
+#   GRCh38: https://ftp.ncbi.nih.gov/snp/latest_release/VCF/GCF_000001405.40.gz
+#   GRCh37: https://ftp.ncbi.nih.gov/snp/latest_release/VCF/GCF_000001405.25.gz
+DBSNP_VCF=""
+
+# ── Post-processing parameters (Steps IV-V) ───────────────────────────────────
+# Number of top SNPs (by P_manta) to extract and annotate
+TOP_N_SNPS=1000
+
+# Number of top SNPs to label on the Manhattan plot
+TOP_LABEL_N=20
+
+# P-value column to use for ranking: P_manta | P_manova
+PVAL_COL="P_manta"
+
+# Genome-wide significance and suggestive thresholds
+GW_THRESH=5e-8
+SUG_THRESH=1e-5
+
+# Window around top locus for regional Manhattan plot (in bp)
+REGIONAL_WINDOW=2000000
+
+# ── Execution mode ────────────────────────────────────────────────────────────
+# Run chromosome jobs in parallel locally (background processes) or via SLURM.
+# Note: for SLURM, USE_SLURM must be true AND sbatch must be available.
+USE_SLURM=false
+
+# Local parallelism: max chromosomes to run simultaneously (0 = all at once)
+LOCAL_PARALLEL=4
+
+# ── SLURM settings (only used when USE_SLURM=true) ───────────────────────────
+SLURM_PARTITION="genoa"
+SLURM_TIME="24:00:00"
+SLURM_MEM="32G"
+SLURM_CPUS=4
+SLURM_MAIL=""          # email for job notifications (leave empty to disable)
+SLURM_EXTRA_ARGS=""    # any extra sbatch arguments
+
+# ── Nextflow settings ─────────────────────────────────────────────────────────
+# Nextflow version to use (empty = use whatever is in PATH)
+NXF_VER=""
+
+# Path to a custom nextflow.config (empty = use nextflow/nextflow.config in this repo)
+NXF_CONFIG=""
+
+# ── Logging / verbosity ───────────────────────────────────────────────────────
+# Print debug-level messages (true | false)
+VERBOSE=false
+
+# Keep per-chromosome Nextflow work directories after merge (true | false)
+KEEP_WORK=false
