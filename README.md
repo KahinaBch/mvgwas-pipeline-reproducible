@@ -7,6 +7,70 @@ Performs five sequential steps: environment setup → input QC → chromosome-pa
 execution → post-processing (top SNPs, rsID, Manhattan/QQ/Regional plots) → report generation.
 
 ---
+## Quick overview
+
+### Inputs
+
+Three files are required, all specified in your config:
+
+| File | Config key | Format | Notes |
+|------|-----------|--------|-------|
+| Genotype VCF | `VCF_FILE` | bgzipped VCF (`.vcf.gz`) + tabix index (`.vcf.gz.tbi`) | Multi-sample; one variant per row; sample IDs must match phenotype/covariate files |
+| Phenotype file | `PHENOTYPE_FILE` | Tab-separated (`.tsv` or `.tsv.gz`), **header required** | First column = sample ID; remaining columns = phenotype traits (one per column); no row index |
+| Covariate file | `COVARIATE_FILE` | Tab-separated (`.tsv` or `.tsv.gz`), **header required** | First column = sample ID; remaining columns = covariates (age, sex, PCs, …); same sample set as phenotype file |
+
+**Sample ID matching:** the pipeline computes the three-way intersection of sample IDs found in the VCF header, the phenotype file, and the covariate file. Only samples present in all three are retained for the analysis. The pipeline aborts if fewer than 50 samples pass this filter.
+
+**Chromosome naming:** both `chr1` and `1` styles are auto-detected from the VCF header.
+
+---
+
+### Outputs
+
+All outputs are written under `OUTPUT_DIR` (set in config):
+
+```
+OUTPUT_DIR/
+├── inputs/                          ← Step II
+│   ├── samples_vcf.txt              # All sample IDs extracted from the VCF
+│   ├── samples_intersection.txt     # Final sample list (three-way overlap)
+│   ├── phenotype_filtered.tsv       # Phenotype file restricted to intersection samples
+│   ├── covariate_filtered.tsv       # Covariate file restricted to intersection samples
+│   └── input_validation_report.txt  # Detailed QC log (counts, duplicates, NAs)
+│
+├── chr_vcfs/                        ← Step III (intermediate)
+│   ├── chr1.vcf.gz + .tbi           # Per-chromosome VCF subsets
+│   └── ...
+│
+├── chr_results/                     ← Step III (intermediate)
+│   ├── chr1/result/mvgwas_chr1.tsv  # Raw mvgwas-nf output per chromosome
+│   └── ...
+│
+├── results/                         ← Steps III & IV
+│   ├── mvgwas_merged.tsv            # Full merged association results (all chromosomes)
+│   ├── top_1000_snps.tsv            # Top N associations sorted by p-value
+│   └── top_1000_snps_rsid.tsv       # Same, with rsID annotation column added
+│
+├── qc/                              ← Step III
+│   └── merge_qc_report.txt          # Per-chromosome variant counts, missing chr list
+│
+├── plots/                           ← Step IV
+│   ├── manhattan_<RUN_NAME>.png     # Genome-wide Manhattan plot
+│   ├── qq_<RUN_NAME>.png            # QQ plot with λ GC
+│   └── regional_<RUN_NAME>.png      # Regional Manhattan ± window around top locus
+│
+├── logs/                            ← All steps
+│   ├── <RUN_NAME>_pipeline.log      # Master timestamped log
+│   ├── chr1.log … chr22.log         # Per-chromosome nextflow logs
+│   └── plotting.log                 # R plotting log
+│
+├── <RUN_NAME>_run_metadata.txt      # Key=value store of all runtime paths & stats
+├── run_stats.tsv                    # Tab-separated summary statistics table
+├── <RUN_NAME>_report.md             ← Step V — human-readable run report
+└── <RUN_NAME>_report.html           ← Step V — same report as standalone HTML
+```
+
+---
 
 ## Requirements
 
