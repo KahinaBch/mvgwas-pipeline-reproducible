@@ -42,22 +42,36 @@ OUTPUT_DIR/
 │   ├── chr1.vcf.gz + .tbi           # Per-chromosome VCF subsets
 │   └── ...
 │
-├── chr_results/                     ← Step III (intermediate)
-│   ├── chr1/result/mvgwas_chr1.tsv  # Raw mvgwas-nf output per chromosome
+├── chr_results/                         ← Step III — combined stratum
+│   ├── chr1/result/mvgwas_chr1.tsv      # Raw mvgwas-nf output per chromosome
+│   └── ...
+├── chr_results_male/                    ← Step III — male stratum (if SEX_STRATIFIED)
+│   └── chr1/result/mvgwas_chr1.tsv
+├── chr_results_female/                  ← Step III — female stratum (if SEX_STRATIFIED)
 │   └── ...
 │
-├── results/                         ← Steps III & IV
-│   ├── mvgwas_merged.tsv            # Full merged association results (all chromosomes)
-│   ├── top_1000_snps.tsv            # Top N associations sorted by p-value
-│   └── top_1000_snps_rsid.tsv       # Same, with rsID annotation column added
+├── results/                             ← Steps III & IV — combined stratum
+│   ├── mvgwas_merged.tsv                # Full merged association results
+│   ├── top_1000_snps.tsv                # Top N associations sorted by p-value
+│   └── top_1000_snps_rsid.tsv           # Same, with rsID annotation column
+├── results_male/                        ← Steps III & IV — male stratum (if SEX_STRATIFIED)
+│   ├── mvgwas_merged.tsv
+│   ├── top_1000_snps.tsv
+│   └── top_1000_snps_rsid.tsv
+├── results_female/                      ← Steps III & IV — female stratum (if SEX_STRATIFIED)
+│   └── ...
 │
-├── qc/                              ← Step III
-│   └── merge_qc_report.txt          # Per-chromosome variant counts, missing chr list
+├── qc/                                  ← Step III
+│   └── merge_qc_report.txt              # Per-chromosome variant counts, missing chr list
 │
-├── plots/                           ← Step IV
-│   ├── manhattan_<RUN_NAME>.png     # Genome-wide Manhattan plot
-│   ├── qq_<RUN_NAME>.png            # QQ plot with λ GC
-│   └── regional_<RUN_NAME>.png      # Regional Manhattan ± window around top locus
+├── plots/                               ← Step IV — combined stratum
+│   ├── manhattan_<RUN_NAME>.png         # Genome-wide Manhattan plot
+│   ├── qq_<RUN_NAME>.png                # QQ plot with λ GC
+│   └── regional_<RUN_NAME>.png          # Regional Manhattan ± window around top locus
+├── plots_male/                          ← Step IV — male stratum (if SEX_STRATIFIED)
+│   └── manhattan_<RUN_NAME>_male.png  …
+├── plots_female/                        ← Step IV — female stratum (if SEX_STRATIFIED)
+│   └── manhattan_<RUN_NAME>_female.png …
 │
 ├── logs/                            ← All steps
 │   ├── <RUN_NAME>_pipeline.log      # Master timestamped log
@@ -117,6 +131,7 @@ Options:
   --resume                 Skip steps whose checkpoint already exists
   --dry-run                Print commands without executing them
   --verbose                Enable DEBUG-level logging
+  --sex-stratified         Run sex-stratified analysis (male + female + combined)
   --help                   Print this help message
 ```
 
@@ -142,6 +157,12 @@ Options:
 - Filters phenotype and covariate files to the intersection set
 - Reports exclusion counts per source
 - Aborts if the sample intersection is < 50
+- **Sex stratification** (when `SEX_STRATIFIED=true` or `--sex-stratified`):
+  - Auto-detects the sex/gender column in the covariate file (looks for `sex`, `gender`, case-insensitive)
+  - Auto-detects coding: `1/2`, `M/F`, `male/female`, or `0/1`; overrideable via `SEX_MALE_CODE` / `SEX_FEMALE_CODE`
+  - Produces separate filtered phenotype + covariate files for males and females
+  - Writes `samples_male.txt` and `samples_female.txt` to `inputs/`
+  - Warns if either stratum has < 50 samples
 
 ### Step III — Chromosome-Parallel GWAS Execution
 - Splits the VCF by chromosome using `bcftools view -r`
@@ -178,6 +199,12 @@ Copy `config.conf.template` and edit:
 # === Run identity ===
 RUN_NAME="my_analysis"
 OUTPUT_DIR="/path/to/output"
+
+# === Sex-stratified analysis ===
+SEX_STRATIFIED=false          # true to run male + female + combined
+SEX_COL=""                    # sex column in covariate file (auto-detected if empty)
+SEX_MALE_CODE=""              # e.g. 1, M, male  (auto-detected if empty)
+SEX_FEMALE_CODE=""            # e.g. 2, F, female (auto-detected if empty)
 
 # === Genotype input format ===
 # Set to 'plink' to convert PLINK binary files to VCF automatically.

@@ -22,14 +22,22 @@ if [ -f "${META}" ]; then
     done < "${META}"
 fi
 
-log_section "[Step III] Merging chromosome results"
-
+# Accept per-stratum paths from 03_run_pipeline.sh (or fall back to defaults)
+STRATUM_LABEL="${STRATUM_LABEL:-combined}"
 read -ra CHR_ARRAY <<< "${CHROMOSOMES:-1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22}"
-CHR_RESULTS_DIR="${OUTPUT_DIR}/chr_results"
-RESULTS_DIR="${OUTPUT_DIR}/results"
+
+if [ "${STRATUM_LABEL}" = "combined" ]; then
+    CHR_RESULTS_DIR="${STRATUM_CHR_RESULTS_DIR:-${OUTPUT_DIR}/chr_results}"
+    RESULTS_DIR="${STRATUM_RESULTS_DIR:-${OUTPUT_DIR}/results}"
+else
+    CHR_RESULTS_DIR="${STRATUM_CHR_RESULTS_DIR:-${OUTPUT_DIR}/chr_results_${STRATUM_LABEL}}"
+    RESULTS_DIR="${STRATUM_RESULTS_DIR:-${OUTPUT_DIR}/results_${STRATUM_LABEL}}"
+fi
 QC_DIR="${OUTPUT_DIR}/qc"
 LOGS_DIR="${OUTPUT_DIR}/logs"
 mkdir -p "${RESULTS_DIR}" "${QC_DIR}"
+
+log_section "[Step III] Merging chromosome results [stratum: ${STRATUM_LABEL}]"
 
 MERGED="${RESULTS_DIR}/mvgwas_merged.tsv"
 QC_REPORT="${QC_DIR}/merge_qc_report.txt"
@@ -158,12 +166,19 @@ if [ "${DRY_RUN}" = "false" ]; then
     log_ok "  QC report: ${QC_REPORT}"
 
     # ── Export merged path to metadata ────────────────────────────────────────
-    echo "MERGED_RESULTS=${MERGED}" >> "${META}"
-    echo "MERGE_QC_REPORT=${QC_REPORT}" >> "${META}"
-    echo "TOTAL_ASSOCIATIONS=${TOTAL_ROWS}" >> "${META}"
-    echo "HEADER_COLUMNS=${HEADER}" >> "${META}"
+    STRATUM_UC=$(echo "${STRATUM_LABEL}" | tr 'a-z' 'A-Z')
+    if [ "${STRATUM_LABEL}" = "combined" ]; then
+        echo "MERGED_RESULTS=${MERGED}"        >> "${META}"
+        echo "MERGE_QC_REPORT=${QC_REPORT}"    >> "${META}"
+        echo "TOTAL_ASSOCIATIONS=${TOTAL_ROWS}" >> "${META}"
+        echo "HEADER_COLUMNS=${HEADER}"         >> "${META}"
+    else
+        echo "MERGED_RESULTS_${STRATUM_UC}=${MERGED}"         >> "${META}"
+        echo "MERGE_QC_REPORT_${STRATUM_UC}=${QC_REPORT}"     >> "${META}"
+        echo "TOTAL_ASSOCIATIONS_${STRATUM_UC}=${TOTAL_ROWS}" >> "${META}"
+    fi
 
-    log_milestone "Step III complete — merged results available at ${MERGED}"
+    log_milestone "Step III [${STRATUM_LABEL}] complete — merged results: ${MERGED}"
 else
     log_info "  [DRY-RUN] Would merge ${N_PRESENT} chromosome files → ${MERGED}"
 fi

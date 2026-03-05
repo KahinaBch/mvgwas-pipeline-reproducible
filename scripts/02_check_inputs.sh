@@ -339,10 +339,73 @@ if [ "${N_PHENO_FILTERED}" -ne "${N_INTERSECT}" ] || [ "${N_COV_FILTERED}" -ne "
 fi
 
 # Export paths for use by downstream steps
-echo "PHENOTYPE_FILTERED=${INPUTS_DIR}/phenotype_filtered.tsv" >> "${OUTPUT_DIR}/${RUN_NAME}_run_metadata.txt"
-echo "COVARIATE_FILTERED=${INPUTS_DIR}/covariate_filtered.tsv" >> "${OUTPUT_DIR}/${RUN_NAME}_run_metadata.txt"
-echo "SAMPLES_INTERSECTION=${INPUTS_DIR}/samples_intersection.txt" >> "${OUTPUT_DIR}/${RUN_NAME}_run_metadata.txt"
-echo "VCF_CHR_PREFIX=${VCF_CHR_PREFIX}" >> "${OUTPUT_DIR}/${RUN_NAME}_run_metadata.txt"
+META_FILE="${OUTPUT_DIR}/${RUN_NAME}_run_metadata.txt"
+echo "PHENOTYPE_FILTERED=${INPUTS_DIR}/phenotype_filtered.tsv" >> "${META_FILE}"
+echo "COVARIATE_FILTERED=${INPUTS_DIR}/covariate_filtered.tsv" >> "${META_FILE}"
+echo "SAMPLES_INTERSECTION=${INPUTS_DIR}/samples_intersection.txt" >> "${META_FILE}"
+echo "VCF_CHR_PREFIX=${VCF_CHR_PREFIX}" >> "${META_FILE}"
+# Default: combined-only analysis (may be overwritten by 2G if SEX_STRATIFIED=true)
+echo "STRATA=combined" >> "${META_FILE}"
+
+# =============================================================================
+# 2G. Sex stratification (optional)
+# =============================================================================
+if [ "${SEX_STRATIFIED:-false}" = "true" ]; then
+    log_section "[Step II] Sex stratification"
+    mkdir -p "${OUTPUT_DIR}/logs"
+
+    # Auto-detect sex coding and split sample IDs into male/female lists
+    python3 "${SCRIPT_DIR}/scripts/02_sex_stratify.py" \
+        --cov-in         "${INPUTS_DIR}/covariate_filtered.tsv" \
+        ${SEX_COL:+--sex-col "${SEX_COL}"} \
+        ${SEX_MALE_CODE:+--male-code "${SEX_MALE_CODE}"} \
+        ${SEX_FEMALE_CODE:+--female-code "${SEX_FEMALE_CODE}"} \
+        --samples-male   "${INPUTS_DIR}/samples_male.txt" \
+        --samples-female "${INPUTS_DIR}/samples_female.txt" \
+        --report         "${INPUTS_DIR}/sex_stratification_report.txt" \
+        2>&1 | tee -a "${OUTPUT_DIR}/logs/sex_stratify.log"
+
+    N_MALE=$(wc -l < "${INPUTS_DIR}/samples_male.txt" | tr -d ' ')
+    N_FEMALE=$(wc -l < "${INPUTS_DIR}/samples_female.txt" | tr -d ' ')
+    log_ok "  Male samples: ${N_MALE}  |  Female samples: ${N_FEMALE}"
+    [ "${N_MALE}"   -lt 50 ] && log_warn "  WARNING: only ${N_MALE} males — GWAS may be underpowered"
+    [ "${N_FEMALE}" -lt 50 ] && log_warn "  WARNING: only ${N_FEMALE} females — GWAS may be underpowered"
+
+    # Filter phenotype + covariate for each sex stratum
+    for STRATUM in male female; do
+        log_info "  Filtering inputs for stratum: ${STRATUM}"
+        python3 "${SCRIPT_DIR}/scripts/02_filter_individuals.py" \
+            --pheno-in  "${PHENOTYPE_FILE}" \
+            --cov-in    "${COVARIATE_FILE}" \
+            --samples   "${INPUTS_DIR}/samples_${STRATUM}.txt" \
+            --pheno-out "${INPUTS_DIR}/phenotype_${STRATUM}.tsv" \
+            --cov-out   "${INPUTS_DIR}/covariate_${STRATUM}.tsv" \
+            --report    "${INPUTS_DIR}/filter_report_${STRATUM}.txt" \
+            --verbose
+
+        N_STR=$(count_data_rows "${INPUTS_DIR}/phenotype_${STRATUM}.tsv")
+        log_ok "  ${STRATUM^}: ${N_STR} samples filtered"
+
+        STRATUM_UC=$(echo "${STRATUM}" | tr 'a-z' 'A-Z')
+        echo "PHENO_${STRATUM_UC}=${INPUTS_DIR}/phenotype_${STRATUM}.tsv" >> "${META_FILE}"
+        echo "COV_${STRATUM_UC}=${INPUTS_DIR}/covariate_${STRATUM}.tsv"   >> "${META_FILE}"
+        echo "SAMPLES_${STRATUM_UC}=${INPUTS_DIR}/samples_${STRATUM}.txt" >> "${META_FILE}"
+        record_stat "n_samples_${STRATUM}" "${N_STR}"
+    done
+
+    # Overwrite STRATA — combined + both sex strata
+    echo "STRATA=combined male female" >> "${META_FILE}"
+    record_stat "sex_stratified" "true"
+    record_stat "n_samples_male"   "${N_MALE}"
+    record_stat "n_samples_female" "${N_FEMALE}"
+
+    _report ""
+    _report "Sex stratification"
+    _report "  Sex column     : ${SEX_COL:-auto-detected}"
+    _report "  Male samples   : ${N_MALE}  → ${INPUTS_DIR}/samples_male.txt"
+    _report "  Female samples : ${N_FEMALE}  → ${INPUTS_DIR}/samples_female.txt"
+    _report "  See            : ${INPUTS_DIR}/sex_stratification_report.txt"
+fi
 
 _report ""
 _report "Filtered files (used in pipeline)"

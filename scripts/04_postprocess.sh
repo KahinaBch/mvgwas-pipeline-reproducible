@@ -17,13 +17,9 @@ if [ -f "${META}" ]; then
     done < "${META}"
 fi
 
-require_file "${MERGED_RESULTS:-}" "Merged GWAS results"
-
-RESULTS_DIR="${OUTPUT_DIR}/results"
-QC_DIR="${OUTPUT_DIR}/qc"
-PLOTS_DIR="${OUTPUT_DIR}/plots"
-LOGS_DIR="${OUTPUT_DIR}/logs"
-mkdir -p "${RESULTS_DIR}" "${QC_DIR}" "${PLOTS_DIR}"
+# Read strata from metadata
+read -ra STRATA_ARR <<< "${STRATA:-combined}"
+log_info "  Strata to post-process: ${STRATA_ARR[*]}"
 
 PVAL_COL="${PVAL_COL:-P_manta}"
 TOP_N="${TOP_N_SNPS:-1000}"
@@ -32,19 +28,58 @@ GW_THRESH="${GW_THRESH:-5e-8}"
 SUG_THRESH="${SUG_THRESH:-1e-5}"
 TOP_LABEL_N="${TOP_LABEL_N:-20}"
 REGIONAL_WINDOW="${REGIONAL_WINDOW:-2000000}"
+LOGS_DIR="${OUTPUT_DIR}/logs"
+mkdir -p "${LOGS_DIR}"
+
+# Determine dbSNP source once — shared across all strata
+if [ -n "${DBSNP_VCF:-}" ] && [ -f "${DBSNP_VCF}" ]; then
+    DBSNP_SOURCE="${DBSNP_VCF}"
+    log_info "  Using local dbSNP VCF: ${DBSNP_VCF}"
+else
+    [ "${GENOME_BUILD}" = "GRCh38" ] && \
+        DBSNP_SOURCE="https://ftp.ncbi.nih.gov/snp/latest_release/VCF/GCF_000001405.40.gz" || \
+        DBSNP_SOURCE="https://ftp.ncbi.nih.gov/snp/latest_release/VCF/GCF_000001405.25.gz"
+    log_warn "  DBSNP_VCF not set. Falling back to remote: ${DBSNP_SOURCE}"
+    log_warn "  Set DBSNP_VCF in your config for faster annotation."
+fi
 
 # =============================================================================
-# 4A. Extract top N SNPs
+# Per-stratum loop: 4A top SNPs → 4B rsID annotation → 4C plots
 # =============================================================================
-log_section "[Step IV] Extracting top ${TOP_N} SNPs by ${PVAL_COL}"
+for STRATUM in "${STRATA_ARR[@]}"; do
+    log_section "[Step IV] Stratum: ${STRATUM}"
 
-TOP_SNPS="${RESULTS_DIR}/top_${TOP_N}_snps.tsv"
+    STRATUM_UC=$(echo "${STRATUM}" | tr 'a-z' 'A-Z')
+    if [ "${STRATUM}" = "combined" ]; then
+        eval "STRATUM_MERGED=\"\${MERGED_RESULTS:-}\""
+        STRATUM_RESULTS_DIR="${OUTPUT_DIR}/results"
+        STRATUM_PLOTS_DIR="${OUTPUT_DIR}/plots"
+        STRATUM_RUN_LABEL="${RUN_NAME}"
+        STRATUM_STAT_SUFFIX=""
+    else
+        eval "STRATUM_MERGED=\"\${MERGED_RESULTS_${STRATUM_UC}:-}\""
+        STRATUM_RESULTS_DIR="${OUTPUT_DIR}/results_${STRATUM}"
+        STRATUM_PLOTS_DIR="${OUTPUT_DIR}/plots_${STRATUM}"
+        STRATUM_RUN_LABEL="${RUN_NAME}_${STRATUM}"
+        STRATUM_STAT_SUFFIX="_${STRATUM}"
+    fi
+
+    if [ -z "${STRATUM_MERGED}" ] || [ ! -f "${STRATUM_MERGED}" ]; then
+        log_warn "  No merged results for stratum '${STRATUM}' — skipping (expected: ${STRATUM_MERGED:-<unset>})"
+        continue
+    fi
+    mkdir -p "${STRATUM_RESULTS_DIR}" "${STRATUM_PLOTS_DIR}"
+    log_info "  Merged results : ${STRATUM_MERGED}"
+
+    # ── 4A. Extract top N SNPs ───────────────────────────────────────────────
+    log_info "  [4A] Extracting top ${TOP_N} SNPs by ${PVAL_COL}"
+    TOP_SNPS="${STRATUM_RESULTS_DIR}/top_${TOP_N}_snps.tsv"
 if [ -f "${TOP_SNPS}" ] && [ -s "${TOP_SNPS}" ]; then
     log_info "  Top SNPs file already exists — skipping"
 else
     if [ "${DRY_RUN}" = "false" ]; then
         # Determine column index of PVAL_COL
-        HEADER=$(head -1 "${MERGED_RESULTS}")
+        HEADER=$(head -1 "${STRATUM_MERGED}")
         COL_IDX=$(echo "${HEADER}" | tr '\t' '\n' | grep -n "^${PVAL_COL}$" | cut -d: -f1)
         if [ -z "${COL_IDX}" ]; then
             log_warn "  Column '${PVAL_COL}' not found — trying case-insensitive match"
@@ -56,16 +91,16 @@ else
         log_info "  P-value column '${PVAL_COL}' is column ${COL_IDX}"
 
         # Sort numerically ascending by p-value, take header + top N rows
-        head -1 "${MERGED_RESULTS}" > "${TOP_SNPS}"
+        head -1 "${STRATUM_MERGED}" > "${TOP_SNPS}"
         awk -v col="${COL_IDX}" 'NR>1 && $col!="" && $col!="NA" && $col+0==$col' \
-            "${MERGED_RESULTS}" | \
+            "${STRATUM_MERGED}" | \
             sort -k"${COL_IDX},${COL_IDX}"g | \
             head -n "${TOP_N}" >> "${TOP_SNPS}"
 
         N_TOP=$(( $(wc -l < "${TOP_SNPS}") - 1 ))
         log_ok "  Top ${N_TOP} associations → ${TOP_SNPS}"
-        record_stat "top_n_extracted" "${N_TOP}"
-        echo "TOP_SNPS=${TOP_SNPS}" >> "${META}"
+        record_stat "top_n_extracted${STRATUM_STAT_SUFFIX}" "${N_TOP}"
+        echo "TOP_SNPS${STRATUM_UC:+_${STRATUM_UC}}=${TOP_SNPS}" >> "${META}"
     else
         log_info "  [DRY-RUN] Would extract top ${TOP_N} SNPs"
     fi
@@ -76,30 +111,16 @@ fi
 # =============================================================================
 log_section "[Step IV] rsID annotation (build: ${GENOME_BUILD})"
 
-ANNOTATED_TSV="${RESULTS_DIR}/top_${TOP_N}_snps_rsid.tsv"
-
-# Determine dbSNP VCF source
-if [ -n "${DBSNP_VCF:-}" ] && [ -f "${DBSNP_VCF}" ]; then
-    log_info "  Using local dbSNP VCF: ${DBSNP_VCF}"
-    DBSNP_SOURCE="${DBSNP_VCF}"
-else
-    # Remote URL based on genome build
-    if [ "${GENOME_BUILD}" = "GRCh38" ]; then
-        DBSNP_URL="https://ftp.ncbi.nih.gov/snp/latest_release/VCF/GCF_000001405.40.gz"
-    else
-        DBSNP_URL="https://ftp.ncbi.nih.gov/snp/latest_release/VCF/GCF_000001405.25.gz"
-    fi
-    log_warn "  DBSNP_VCF not set. Falling back to remote: ${DBSNP_URL}"
-    log_warn "  This may be very slow. Set DBSNP_VCF in your config for faster annotation."
-    DBSNP_SOURCE="${DBSNP_URL}"
-fi
+    # ── 4B. rsID annotation ──────────────────────────────────────────────────
+    log_info "  [4B] rsID annotation (build: ${GENOME_BUILD})"
+    ANNOTATED_TSV="${STRATUM_RESULTS_DIR}/top_${TOP_N}_snps_rsid.tsv"
 
 if [ -f "${ANNOTATED_TSV}" ] && [ -s "${ANNOTATED_TSV}" ]; then
     log_info "  Annotated file already exists — skipping annotation"
-elif [ "${DRY_RUN}" = "false" ]; then
+elif [ "${DRY_RUN}" = "false" ] && [ -f "${TOP_SNPS}" ]; then
     # ── Build a minimal VCF from the top SNPs for bcftools annotate ──────────
-    TMP_VCF="${RESULTS_DIR}/.top_snps_tmp.vcf"
-    TMP_ANNOTATED="${RESULTS_DIR}/.top_snps_annotated.vcf"
+    TMP_VCF="${STRATUM_RESULTS_DIR}/.top_snps_tmp.vcf"
+    TMP_ANNOTATED="${STRATUM_RESULTS_DIR}/.top_snps_annotated.vcf"
 
     HEADER=$(head -1 "${TOP_SNPS}")
     # Try MANTA-style columns (CHR/POS) or PLINK-style (#CHROM/POS/ID/REF/ALT)
@@ -136,7 +157,7 @@ elif [ "${DRY_RUN}" = "false" ]; then
     tabix -p vcf "${TMP_ANNOTATED}.gz"
 
     # ── Build a CHR:POS → rsID lookup table ──────────────────────────────────
-    LOOKUP="${RESULTS_DIR}/.rsid_lookup.tsv"
+    LOOKUP="${STRATUM_RESULTS_DIR}/.rsid_lookup.tsv"
     bcftools query -f '%CHROM\t%POS\t%ID\n' "${TMP_ANNOTATED}.gz" > "${LOOKUP}"
 
     # ── Join rsIDs back to top SNPs table ────────────────────────────────────
@@ -172,56 +193,48 @@ print(f"Annotated {sum(1 for _ in open('${ANNOTATED_TSV}'))-1} SNPs.")
 PYEOF
 
     log_ok "  rsID annotation complete → ${ANNOTATED_TSV}"
-    record_stat "rsid_annotated" "true"
-    echo "ANNOTATED_SNPS=${ANNOTATED_TSV}" >> "${META}"
-
-    # Cleanup temp files
+    record_stat "rsid_annotated${STRATUM_STAT_SUFFIX}" "true"
+    echo "ANNOTATED_SNPS${STRATUM_UC:+_${STRATUM_UC}}=${ANNOTATED_TSV}" >> "${META}"
     rm -f "${TMP_VCF}.gz" "${TMP_VCF}.gz.tbi" "${TMP_ANNOTATED}.gz" "${TMP_ANNOTATED}.gz.tbi" "${LOOKUP}"
 else
-    log_info "  [DRY-RUN] Would annotate rsIDs using ${DBSNP_SOURCE}"
+    log_info "  [DRY-RUN] Would annotate rsIDs for stratum '${STRATUM}'"
 fi
 
-# Use annotated file if available, else top SNPs
-PLOT_TOP="${ANNOTATED_TSV:-${TOP_SNPS}}"
-[ -f "${PLOT_TOP}" ] || PLOT_TOP="${TOP_SNPS}"
+    # Use annotated file if available, else top SNPs
+    PLOT_TOP="${ANNOTATED_TSV:-${TOP_SNPS}}"
+    [ -f "${PLOT_TOP}" ] || PLOT_TOP="${TOP_SNPS}"
 
-# =============================================================================
-# 4C. Generate plots: Manhattan, QQ, Regional Manhattan
-# =============================================================================
-log_section "[Step IV] Generating plots"
+    # ── 4C. Plots ────────────────────────────────────────────────────────────
+    log_info "  [4C] Generating plots for stratum '${STRATUM}'"
+    if [ "${DRY_RUN}" = "false" ]; then
+        Rscript "${SCRIPT_DIR}/scripts/04_plot_manhattan.R" \
+            --input        "${STRATUM_MERGED}" \
+            --top-file     "${PLOT_TOP}" \
+            --output-dir   "${STRATUM_PLOTS_DIR}" \
+            --run-name     "${STRATUM_RUN_LABEL}" \
+            --pval-col     "${PVAL_COL}" \
+            --genome-build "${GENOME_BUILD}" \
+            --gw-thresh    "${GW_THRESH}" \
+            --sug-thresh   "${SUG_THRESH}" \
+            --top-label-n  "${TOP_LABEL_N}" \
+            --regional-window "${REGIONAL_WINDOW}" \
+            2>&1 | tee -a "${LOGS_DIR}/plotting_${STRATUM}.log"
 
-if [ "${DRY_RUN}" = "false" ]; then
-    log_info "  Running Manhattan / QQ / Regional plot script..."
-    Rscript "${SCRIPT_DIR}/scripts/04_plot_manhattan.R" \
-        --input "${MERGED_RESULTS}" \
-        --top-file "${PLOT_TOP}" \
-        --output-dir "${PLOTS_DIR}" \
-        --run-name "${RUN_NAME}" \
-        --pval-col "${PVAL_COL}" \
-        --genome-build "${GENOME_BUILD}" \
-        --gw-thresh "${GW_THRESH}" \
-        --sug-thresh "${SUG_THRESH}" \
-        --top-label-n "${TOP_LABEL_N}" \
-        --regional-window "${REGIONAL_WINDOW}" \
-        2>&1 | tee -a "${LOGS_DIR}/plotting.log"
+        for PLOT_TYPE in manhattan qq regional; do
+            PNG="${STRATUM_PLOTS_DIR}/${PLOT_TYPE}_${STRATUM_RUN_LABEL}.png"
+            [ -f "${PNG}" ] \
+                && log_ok "  ${PLOT_TYPE^}: ${PNG}" \
+                || log_warn "  ${PLOT_TYPE^} not found — check ${LOGS_DIR}/plotting_${STRATUM}.log"
+        done
 
-    # Verify outputs
-    for PLOT_TYPE in manhattan qq regional; do
-        EXPECTED_PNG="${PLOTS_DIR}/${PLOT_TYPE}_${RUN_NAME}.png"
-        if [ -f "${EXPECTED_PNG}" ]; then
-            log_ok "  ${PLOT_TYPE^} plot: ${EXPECTED_PNG}"
-        else
-            log_warn "  ${PLOT_TYPE^} plot not found — check ${LOGS_DIR}/plotting.log"
-        fi
-    done
+        echo "PLOT_MANHATTAN${STRATUM_UC:+_${STRATUM_UC}}=${STRATUM_PLOTS_DIR}/manhattan_${STRATUM_RUN_LABEL}.png" >> "${META}"
+        echo "PLOT_QQ${STRATUM_UC:+_${STRATUM_UC}}=${STRATUM_PLOTS_DIR}/qq_${STRATUM_RUN_LABEL}.png"             >> "${META}"
+        echo "PLOT_REGIONAL${STRATUM_UC:+_${STRATUM_UC}}=${STRATUM_PLOTS_DIR}/regional_${STRATUM_RUN_LABEL}.png" >> "${META}"
+        echo "PLOTS_DIR${STRATUM_UC:+_${STRATUM_UC}}=${STRATUM_PLOTS_DIR}"                                       >> "${META}"
+    else
+        log_info "  [DRY-RUN] Would call 04_plot_manhattan.R for stratum '${STRATUM}'"
+    fi
 
-    # Export plot paths to metadata
-    echo "PLOT_MANHATTAN=${PLOTS_DIR}/manhattan_${RUN_NAME}.png" >> "${META}"
-    echo "PLOT_QQ=${PLOTS_DIR}/qq_${RUN_NAME}.png" >> "${META}"
-    echo "PLOT_REGIONAL=${PLOTS_DIR}/regional_${RUN_NAME}.png" >> "${META}"
-    echo "PLOTS_DIR=${PLOTS_DIR}" >> "${META}"
-else
-    log_info "  [DRY-RUN] Would call 04_plot_manhattan.R"
-fi
+done  # end strata loop
 
-log_milestone "Step IV complete — top SNPs, rsID annotation and plots done"
+log_milestone "Step IV complete — top SNPs, rsID annotation and plots done for all strata"

@@ -57,7 +57,8 @@ while [[ $# -gt 0 ]]; do
         --steps)     STEPS_TO_RUN="$2";     shift 2 ;;
         --resume)    RESUME=true;           shift   ;;
         --dry-run)   DRY_RUN=true;          shift   ;;
-        --verbose)   VERBOSE=true;          shift   ;;
+        --verbose)          VERBOSE=true;          shift   ;;
+        --sex-stratified)   SEX_STRATIFIED=true;   shift   ;;
         --help|-h)
             grep '^#' "${BASH_SOURCE[0]}" | head -40 | sed 's/^# \{0,1\}//'
             exit 0
@@ -77,7 +78,7 @@ source "${CONFIG_FILE}"
 
 # Apply overrides
 [ -n "${BUILD_OVERRIDE}" ] && GENOME_BUILD="${BUILD_OVERRIDE}"
-export DRY_RUN VERBOSE
+export DRY_RUN VERBOSE SEX_STRATIFIED
 
 # ── Validate mandatory config keys ───────────────────────────────────────────
 _check_config() {
@@ -122,6 +123,8 @@ log_info ""
     echo "PHENOTYPE_FILE=${PHENOTYPE_FILE}"
     echo "COVARIATE_FILE=${COVARIATE_FILE}"
     echo "PIPELINE_DIR=${PIPELINE_DIR}"
+    echo "SEX_STRATIFIED=${SEX_STRATIFIED:-false}"
+    echo "SEX_COL=${SEX_COL:-}"
 } > "${OUTPUT_DIR}/${RUN_NAME}_run_metadata.txt"
 
 # Initialise run_stats.tsv
@@ -167,6 +170,20 @@ if should_run_step 2; then
     log_milestone "Step II complete — inputs validated and harmonised"
     record_stat "step2_completed" "$(date '+%Y-%m-%d %H:%M:%S')"
 fi
+
+# Read STRATA from metadata written by Step II (default: combined)
+META_FILE="${OUTPUT_DIR}/${RUN_NAME}_run_metadata.txt"
+if [ -f "${META_FILE}" ]; then
+    _STRATA_VAL=$(grep "^STRATA=" "${META_FILE}" | tail -1 | cut -d= -f2-)
+    [ -n "${_STRATA_VAL}" ] && STRATA="${_STRATA_VAL}"
+    # Export all metadata keys so subscripts can resolve stratum-specific paths
+    while IFS='=' read -r _K _V; do
+        [[ "${_K}" =~ ^[A-Z_][A-Z0-9_]*$ ]] && export "${_K}=${_V}"
+    done < "${META_FILE}"
+fi
+STRATA="${STRATA:-combined}"
+export STRATA
+log_info "Active strata: ${STRATA}"
 
 # ── STEP III: Pipeline execution and output QC ────────────────────────────────
 if should_run_step 3; then
