@@ -52,6 +52,18 @@ MIN_INDIVIDUALS=10
 # Chromosomes to process (space-separated; default: 1-22)
 CHROMOSOMES="1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22"
 
+# ── Genotype input format ─────────────────────────────────────────────────────
+# vcf   : VCF_FILE must point to a bgzipped VCF (*.vcf.gz).
+#          If the tabix index (*.vcf.gz.tbi) is missing it is created automatically.
+# plink : set PLINK_PREFIX to the basename shared by your .bed/.bim/.fam files.
+#          The pipeline will convert them to a bgzipped VCF automatically.
+#          VCF_FILE will be set to <OUTPUT_DIR>/inputs/<basename>.vcf.gz.
+GENO_FORMAT="vcf"     # vcf | plink
+
+# Path prefix for PLINK binary files (without .bed/.bim/.fam extension).
+# Only used when GENO_FORMAT=plink.
+PLINK_PREFIX=""
+
 # ── Container runtime ─────────────────────────────────────────────────────────
 # How to run the MANTA container: singularity | docker | none
 CONTAINER="singularity"

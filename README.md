@@ -179,7 +179,14 @@ Copy `config.conf.template` and edit:
 RUN_NAME="my_analysis"
 OUTPUT_DIR="/path/to/output"
 
+# === Genotype input format ===
+# Set to 'plink' to convert PLINK binary files to VCF automatically.
+GENO_FORMAT="vcf"                 # vcf | plink
+PLINK_PREFIX=""                   # e.g. /path/to/genotypes (without .bed/.bim/.fam)
+
 # === Inputs ===
+# VCF path (used directly when GENO_FORMAT=vcf; auto-set when GENO_FORMAT=plink)
+# If the .tbi index is absent it is created automatically with tabix.
 VCF_FILE="/path/to/genotypes.vcf.gz"
 PHENOTYPE_FILE="/path/to/phenotypes.tsv"
 COVARIATE_FILE="/path/to/covariates.tsv"
@@ -301,7 +308,15 @@ bash run.sh --config my_run.conf --steps 4,5 --resume
 
 ### VCF
 - Bgzipped + tabix-indexed (`.vcf.gz` + `.vcf.gz.tbi`)
+- If the `.tbi` index is absent, it is created automatically using `tabix` — no manual step needed
 - Sample IDs must overlap with phenotype / covariate files
+
+### PLINK binary fileset (optional)
+- Set `GENO_FORMAT=plink` and `PLINK_PREFIX=/path/to/prefix` in your config
+- The pipeline expects `.bed`, `.bim`, and `.fam` files all sharing the same prefix
+- Conversion to bgzipped VCF is performed automatically using `plink2` (preferred) or `plink 1.9` as a fallback, restricted to autosomes (chromosomes 1–22)
+- The converted file is written to `OUTPUT_DIR/inputs/<prefix>.vcf.gz` and indexed; `VCF_FILE` is updated automatically for all downstream steps
+- `plink2` or `plink` must be available in `PATH`
 
 ---
 
@@ -311,6 +326,8 @@ bash run.sh --config my_run.conf --steps 4,5 --resume
 |---------|----------|
 | `Nextflow not found` | Install: `curl -s https://get.nextflow.io | bash` then move to PATH |
 | `bcftools: command not found` | `conda install -c bioconda bcftools` or `brew install bcftools` |
+| `plink2: command not found` | `conda install -c bioconda plink2` or `brew install plink2` (only needed for `GENO_FORMAT=plink`) |
+| VCF index missing | Automatically recreated by the pipeline; or run `tabix -p vcf your.vcf.gz` manually |
 | Java 8 detected | Auto-handled (NXF_VER=22.04.0); or upgrade Java |
 | SLURM jobs queued forever | Check `SLURM_PARTITION` in config |
 | rsID annotation slow | Set `DBSNP_VCF` to a local pre-downloaded dbSNP file |

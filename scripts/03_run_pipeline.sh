@@ -66,6 +66,12 @@ fi
 # =============================================================================
 log_section "[Step III] Splitting VCF by chromosome"
 
+# Auto-create tabix index if it disappeared or was never built
+if [ -f "${VCF_FILE}" ] && [ ! -f "${VCF_FILE}.tbi" ]; then
+    log_warn "  Tabix index missing for ${VCF_FILE} — creating it now..."
+    [ "${DRY_RUN}" = "false" ] && tabix -p vcf "${VCF_FILE}" && log_ok "  Index created."
+fi
+
 read -ra CHR_ARRAY <<< "${CHROMOSOMES:-1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22}"
 
 for CHR in "${CHR_ARRAY[@]}"; do

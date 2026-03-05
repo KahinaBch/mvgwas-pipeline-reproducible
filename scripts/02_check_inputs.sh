@@ -34,7 +34,65 @@ _report "  Generated: $(date '+%Y-%m-%d %H:%M:%S')"
 _report "============================================================"
 
 # =============================================================================
-# 2A. Check input files exist
+# 2A. PLINK → VCF conversion (when GENO_FORMAT=plink)
+# =============================================================================
+GENO_FORMAT="${GENO_FORMAT:-vcf}"
+
+if [ "${GENO_FORMAT}" = "plink" ]; then
+    log_section "[Step II] PLINK → VCF conversion"
+
+    [ -z "${PLINK_PREFIX:-}" ] && die "GENO_FORMAT=plink but PLINK_PREFIX is not set in config."
+
+    require_file "${PLINK_PREFIX}.bed" "PLINK .bed"
+    require_file "${PLINK_PREFIX}.bim" "PLINK .bim"
+    require_file "${PLINK_PREFIX}.fam" "PLINK .fam"
+
+    require_cmd plink2 || require_cmd plink
+    PLINK_CMD=$(command -v plink2 2>/dev/null || command -v plink)
+
+    PLINK_BASENAME=$(basename "${PLINK_PREFIX}")
+    CONVERTED_VCF="${INPUTS_DIR}/${PLINK_BASENAME}.vcf.gz"
+
+    if [ -f "${CONVERTED_VCF}" ] && [ -f "${CONVERTED_VCF}.tbi" ]; then
+        log_info "  Converted VCF already exists — skipping conversion"
+    else
+        log_info "  Converting PLINK → VCF: ${PLINK_PREFIX}"
+        if [ "${DRY_RUN}" = "false" ]; then
+            # plink2 preferred (handles multiallelic); fall back to plink1
+            if [[ "${PLINK_CMD}" == *plink2* ]]; then
+                ${PLINK_CMD} \
+                    --bfile "${PLINK_PREFIX}" \
+                    --recode vcf bgz \
+                    --out "${INPUTS_DIR}/${PLINK_BASENAME}" \
+                    --chr 1-22 \
+                    2>> "${LOGS_DIR:-${OUTPUT_DIR}/logs}/plink_convert.log"
+            else
+                # plink 1.9 path
+                ${PLINK_CMD} \
+                    --bfile "${PLINK_PREFIX}" \
+                    --recode vcf \
+                    --out "${INPUTS_DIR}/${PLINK_BASENAME}" \
+                    --chr 1-22 \
+                    2>> "${LOGS_DIR:-${OUTPUT_DIR}/logs}/plink_convert.log"
+                # bgzip the plain VCF produced by plink 1.9
+                bgzip -f "${INPUTS_DIR}/${PLINK_BASENAME}.vcf"
+            fi
+            tabix -p vcf "${CONVERTED_VCF}"
+            log_ok "  Conversion complete: ${CONVERTED_VCF}"
+        else
+            log_info "  [DRY-RUN] Would convert ${PLINK_PREFIX} → ${CONVERTED_VCF}"
+        fi
+    fi
+
+    # Override VCF_FILE for all downstream steps
+    export VCF_FILE="${CONVERTED_VCF}"
+    echo "VCF_FILE=${VCF_FILE}" >> "${OUTPUT_DIR}/${RUN_NAME}_run_metadata.txt"
+    _report "PLINK source : ${PLINK_PREFIX}.{bed,bim,fam}"
+    _report "Converted VCF: ${CONVERTED_VCF}"
+fi
+
+# =============================================================================
+# 2B. Check input files exist
 # =============================================================================
 log_section "[Step II] File existence checks"
 
@@ -49,16 +107,25 @@ _report "  Phenotype   : ${PHENOTYPE_FILE}"
 _report "  Covariate   : ${COVARIATE_FILE}"
 
 # =============================================================================
-# 2B. VCF file validation
+# 2C. VCF file validation
 # =============================================================================
 log_section "[Step II] VCF file validation"
 
-# Check index
-require_index "${VCF_FILE}"
+# Auto-create tabix index if missing
+if [ ! -f "${VCF_FILE}.tbi" ] && [ ! -f "${VCF_FILE%.vcf.gz}.vcf.gz.tbi" ]; then
+    log_warn "  Tabix index not found for ${VCF_FILE} — creating it now..."
+    if [ "${DRY_RUN}" = "false" ]; then
+        tabix -p vcf "${VCF_FILE}"
+        log_ok "  Index created: ${VCF_FILE}.tbi"
+    else
+        log_info "  [DRY-RUN] Would run: tabix -p vcf ${VCF_FILE}"
+    fi
+fi
 
 # Extract sample IDs from VCF
 log_info "  Extracting sample IDs from VCF..."
-bcftools query -l "${VCF_FILE}" > "${INPUTS_DIR}/samples_vcf.txt"
+bcftools query -l "${VCF_FILE}" > "${INPUTS_DIR}/samples_vcf.txt" 2>/dev/null \
+    || die "bcftools could not read ${VCF_FILE}. Ensure the file is bgzipped and indexed."
 N_VCF=$(wc -l < "${INPUTS_DIR}/samples_vcf.txt")
 log_ok "  VCF samples: $(fmt_num ${N_VCF})"
 
