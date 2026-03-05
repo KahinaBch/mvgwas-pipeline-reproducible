@@ -215,7 +215,24 @@ USE_SLURM=false
 LOCAL_PARALLEL=4
 ```
 
-For SLURM, also set `SLURM_PARTITION`, `SLURM_TIME`, `SLURM_MEM`, `SLURM_CPUS`.
+For SLURM, configure the per-chromosome job and the merge job separately:
+
+```bash
+# === SLURM — per-chromosome array job ===
+SLURM_PARTITION="genoa"       # partition / queue name on your cluster
+SLURM_TIME="24:00:00"         # wall-time per chromosome job
+SLURM_MEM="32G"               # memory per chromosome job
+SLURM_CPUS=4                  # CPUs per chromosome job
+SLURM_MAIL=""                 # email for failure notifications (empty = off)
+SLURM_EXTRA_ARGS=""           # any extra #SBATCH directives (e.g. --account=...)
+
+# === SLURM — merge job (submitted with afterok dependency) ===
+SLURM_MERGE_TIME="02:00:00"   # wall-time for the merge step
+SLURM_MERGE_MEM="16G"         # memory for the merge step
+SLURM_MERGE_CPUS=2            # CPUs for the merge step
+```
+
+The chromosome job array is built automatically from the `CHROMOSOMES` variable, so setting e.g. `CHROMOSOMES="1 2 3"` will submit `--array=1,2,3` rather than the full 1–22.
 
 ---
 

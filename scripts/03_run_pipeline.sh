@@ -132,6 +132,9 @@ if [ "${EXEC_MODE}" = "slurm" ]; then
     # ── SLURM job array approach ─────────────────────────────────────────────
     log_info "  Submitting SLURM job array..."
 
+    # Build array spec from CHROMOSOMES (e.g. "1 2 3" → "1,2,3")
+    ARRAY_SPEC=$(echo "${CHROMOSOMES:-1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22}" | tr ' ' ',')
+
     # Write the per-chromosome worker script
     CHR_WORKER="${LOGS_DIR}/slurm_chr_worker.sh"
     cat > "${CHR_WORKER}" <<EOSLURM
@@ -142,7 +145,7 @@ if [ "${EXEC_MODE}" = "slurm" ]; then
 #SBATCH --time=${SLURM_TIME:-24:00:00}
 #SBATCH --mem=${SLURM_MEM:-32G}
 #SBATCH --cpus-per-task=${SLURM_CPUS:-4}
-#SBATCH --array=1-22
+#SBATCH --array=${ARRAY_SPEC}
 #SBATCH --partition=${SLURM_PARTITION:-genoa}
 $([ -n "${SLURM_MAIL:-}" ] && echo "#SBATCH --mail-type=FAIL" && echo "#SBATCH --mail-user=${SLURM_MAIL:-}" || echo "")
 ${SLURM_EXTRA_ARGS:-}
@@ -170,7 +173,10 @@ EOSLURM
         --job-name="${RUN_NAME}_merge" \
         --output="${LOGS_DIR}/merge.out" \
         --error="${LOGS_DIR}/merge.err" \
-        --time="01:00:00" --mem="16G" \
+        --partition="${SLURM_PARTITION:-genoa}" \
+        --time="${SLURM_MERGE_TIME:-02:00:00}" \
+        --mem="${SLURM_MERGE_MEM:-16G}" \
+        --cpus-per-task="${SLURM_MERGE_CPUS:-2}" \
         --wrap="bash ${SCRIPT_DIR}/scripts/03_merge_results.sh")
     log_ok "  Submitted merge job: ${MERGE_JOB_ID} (depends on ${ARRAY_JOB_ID})"
     log_info "  Monitor: squeue -j ${ARRAY_JOB_ID},${MERGE_JOB_ID}"

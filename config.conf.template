@@ -93,11 +93,16 @@ LOCAL_PARALLEL=4
 
 # ── SLURM settings (only used when USE_SLURM=true) ───────────────────────────
 SLURM_PARTITION="genoa"
-SLURM_TIME="24:00:00"
-SLURM_MEM="32G"
-SLURM_CPUS=4
-SLURM_MAIL=""          # email for job notifications (leave empty to disable)
-SLURM_EXTRA_ARGS=""    # any extra sbatch arguments
+SLURM_TIME="24:00:00"       # wall-time for each per-chromosome job
+SLURM_MEM="32G"            # memory per per-chromosome job
+SLURM_CPUS=4               # CPUs per per-chromosome job
+SLURM_MAIL=""              # email for job notifications (leave empty to disable)
+SLURM_EXTRA_ARGS=""        # any extra sbatch arguments for per-chromosome jobs
+
+# Resources for the merge job (submitted after the array with afterok dependency)
+SLURM_MERGE_TIME="02:00:00"
+SLURM_MERGE_MEM="16G"
+SLURM_MERGE_CPUS=2
 
 # ── Nextflow settings ─────────────────────────────────────────────────────────
 # Nextflow version to use (empty = use whatever is in PATH)
