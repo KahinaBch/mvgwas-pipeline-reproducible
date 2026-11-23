@@ -95,7 +95,7 @@ else
         awk -v col="${COL_IDX}" 'NR>1 && $col!="" && $col!="NA" && $col+0==$col' \
             "${STRATUM_MERGED}" | \
             sort -k"${COL_IDX},${COL_IDX}"g | \
-            head -n "${TOP_N}" >> "${TOP_SNPS}"
+            awk -v n="${TOP_N}" "NR<=n" >> "${TOP_SNPS}"   # repro-fix: head -n -> SIGPIPE under pipefail
 
         N_TOP=$(( $(wc -l < "${TOP_SNPS}") - 1 ))
         log_ok "  Top ${N_TOP} associations → ${TOP_SNPS}"
@@ -141,7 +141,7 @@ elif [ "${DRY_RUN}" = "false" ] && [ -f "${TOP_SNPS}" ]; then
             r = (ref>0) ? $ref : "."
             a = (alt>0) ? $alt : "."
             printf "%s\t%s\t.\t%s\t%s\t.\t.\t.\n", c, $pos, r, a
-        }' "${TOP_SNPS}"
+        }' "${TOP_SNPS}" | sort -k1,1 -k2,2n   # repro-fix: tabix needs position order
     } > "${TMP_VCF}"
 
     bgzip -f "${TMP_VCF}"

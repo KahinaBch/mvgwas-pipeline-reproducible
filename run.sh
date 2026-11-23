@@ -133,10 +133,20 @@ log_info ""
     echo "SEX_STRATIFIED=${SEX_STRATIFIED:-false}"
     echo "SEX_COL=${SEX_COL:-}"
     echo "SKIP_ENRICHMENT=${SKIP_ENRICHMENT:-false}"
-} > "${OUTPUT_DIR}/${RUN_NAME}_run_metadata.txt"
+} > "${OUTPUT_DIR}/${RUN_NAME}_run_metadata.txt.new"
+# repro-fix: with --resume keep what earlier steps recorded (STRATA, per-stratum
+# input paths, SLURM job IDs, ...); readers use the last value of each key.
+if [ "${RESUME}" = "true" ] && [ -f "${OUTPUT_DIR}/${RUN_NAME}_run_metadata.txt" ]; then
+    cat "${OUTPUT_DIR}/${RUN_NAME}_run_metadata.txt.new" >> "${OUTPUT_DIR}/${RUN_NAME}_run_metadata.txt"
+    rm -f "${OUTPUT_DIR}/${RUN_NAME}_run_metadata.txt.new"
+else
+    mv "${OUTPUT_DIR}/${RUN_NAME}_run_metadata.txt.new" "${OUTPUT_DIR}/${RUN_NAME}_run_metadata.txt"
+fi
 
-# Initialise run_stats.tsv
-echo -e "key\tvalue" > "${OUTPUT_DIR}/run_stats.tsv"
+# Initialise run_stats.tsv (kept on --resume)
+if [ "${RESUME}" != "true" ] || [ ! -f "${OUTPUT_DIR}/run_stats.tsv" ]; then
+    echo -e "key\tvalue" > "${OUTPUT_DIR}/run_stats.tsv"
+fi
 record_stat "run_name"    "${RUN_NAME}"
 record_stat "start_time"  "$(date '+%Y-%m-%d %H:%M:%S')"
 record_stat "genome_build" "${GENOME_BUILD}"

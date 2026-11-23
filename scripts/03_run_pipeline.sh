@@ -188,6 +188,10 @@ export VERBOSE="${VERBOSE}"
 export RUN_NAME="${RUN_NAME}"
 
 echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Starting chr\${CHR} [${STRATUM}]"
+# repro-fix: own launch dir per chromosome (avoids concurrent Nextflow -resume
+# session-lock clashes) and propagate nextflow's exit status through tee
+set -eo pipefail
+mkdir -p "${CHR_RESULTS_DIR_STR}/chr\${CHR}" && cd "${CHR_RESULTS_DIR_STR}/chr\${CHR}"
 $(build_nxf_cmd "\${CHR}" "${PHENO_STR}" "${COV_STR}" "${CHR_RESULTS_DIR_STR}") 2>&1 | tee -a "\${PIPELINE_LOG}"
 echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Finished chr\${CHR} [${STRATUM}]"
 EOSLURM
