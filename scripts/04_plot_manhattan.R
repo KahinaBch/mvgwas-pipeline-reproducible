@@ -243,6 +243,10 @@ if (nrow(reg) < 5) {
     if (!is.null(resp) && "ncbiRefSeq" %in% names(resp)) {
       g <- as.data.frame(resp$ncbiRefSeq)
       if (nrow(g) > 0) {
+        # repro-fix: genePred tracks (e.g. ncbiRefSeq) give txStart/txEnd, not chromStart/chromEnd
+        if (!"chromStart" %in% names(g) && all(c("txStart","txEnd") %in% names(g))) {
+          g$chromStart <- as.numeric(g$txStart); g$chromEnd <- as.numeric(g$txEnd)
+        }
         g <- g[, intersect(c("name2","chromStart","chromEnd","strand"), names(g))]
         g <- g[!duplicated(g$name2), ]
         genes_df <- g
