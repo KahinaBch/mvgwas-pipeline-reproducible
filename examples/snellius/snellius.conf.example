@@ -1,0 +1,101 @@
+# =============================================================================
+# examples/snellius/snellius.conf.example — mvgwas-pipeline on Snellius (SURF)
+# =============================================================================
+# Settings used for the ALFA regional-WMH sex-stratified MANTA analysis
+# (reproduced byte-identically from the original Feb-2026 run) and for its
+# AMYPAD replication. Replace the <...> paths, then:
+#   bash   examples/snellius/run_snellius.sh check my.conf
+#   sbatch examples/snellius/run_snellius.sh run   my.conf --skip-test
+# =============================================================================
+
+RUN_NAME="my_mvgwas_run"
+
+# ── Inputs (tab-separated, first column = sample ID) ──────────────────────────
+VCF_FILE="<path>/genotypes.vcf.gz"          # bgzipped + .tbi, chromosomes 1..22
+PHENOTYPE_FILE="<path>/phenotypes.tsv"
+COVARIATE_FILE="<path>/covariates.tsv"
+GENO_FORMAT="vcf"
+PLINK_PREFIX=""
+
+# ── Output: on project space, NOT home (home is limited to 1M files) ─────────
+OUTPUT_DIR="/projects/0/<group>/<you>/<run>/output"
+
+# ── mvgwas-nf clone (KahinaBch/mvgwas-nf, branch dsl2-conversion) ────────────
+PIPELINE_DIR="${HOME}/mvgwas-nf"
+PIPELINE_REPO=""
+PIPELINE_BRANCH="dsl2-conversion"
+
+# ── mvgwas-nf parameters ──────────────────────────────────────────────────────
+CHUNK_SIZE=500
+TRANSFORMATION="none"
+INTERACTION="none"
+# A variant is tested only if all 3 genotype groups have >= MIN_INDIVIDUALS
+# people: an implicit MAF filter of roughly sqrt(MIN_INDIVIDUALS / N).
+MIN_INDIVIDUALS=10
+CHROMOSOMES="1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22"
+
+# ── Sex stratification (combined + male + female) ─────────────────────────────
+SEX_STRATIFIED=true
+SEX_COL="sex"
+SEX_MALE_CODE="1"         # set explicitly: 0/1 coding is otherwise a guess
+SEX_FEMALE_CODE="0"
+
+# ── Container ─────────────────────────────────────────────────────────────────
+CONTAINER="singularity"
+
+# ── Step IV: rsIDs, plots ─────────────────────────────────────────────────────
+GENOME_BUILD="GRCh38"
+# Compute nodes have no internet: use a local file. After step 3, on the login
+# node:  bash scripts/make_dbsnp_subset.sh <dir>/dbsnp_top1000.vcf.gz 1000 \
+#            ${OUTPUT_DIR}/results{,_female,_male}/mvgwas_merged.tsv
+# (with DBSNP=<local full dbSNP> it takes seconds; see the script header).
+DBSNP_VCF="<path>/dbsnp_top1000.vcf.gz"
+TOP_N_SNPS=1000
+TOP_LABEL_N=20
+PVAL_COL="P_manta"
+GW_THRESH=5e-8
+SUG_THRESH=1e-5
+REGIONAL_WINDOW=2000000
+
+# ── Step V: enrichment (needs MAGMA reference files) ──────────────────────────
+SKIP_ENRICHMENT=true
+GWAS_CATALOG_TOP_N=20
+GWAS_CATALOG_CLUMP_KB=500
+GWAS_CATALOG_WINDOW_KB=500
+MAGMA_PATH=""
+MAGMA_REF_DIR=""
+MAGMA_GENESETS_DIR=""
+MAGMA_SAMPLE_N=""
+MAGMA_GENE_WINDOW_KB=10
+
+# ── Execution: SLURM ──────────────────────────────────────────────────────────
+USE_SLURM=true
+LOCAL_PARALLEL=4
+SLURM_PARTITION="genoa"
+SLURM_TIME="48:00:00"
+SLURM_MEM="32G"
+SLURM_CPUS=8
+SLURM_MAIL=""
+SLURM_EXTRA_ARGS=""
+SLURM_MERGE_TIME="02:00:00"
+SLURM_MERGE_MEM="16G"
+SLURM_MERGE_CPUS=2
+SLURM_POST_TIME="04:00:00"
+SLURM_POST_MEM="16G"
+SLURM_POST_CPUS=4
+
+# Run at the start of every SLURM job the pipeline submits (and by
+# run_snellius.sh): jobs submitted from inside a job do not inherit its
+# environment on Snellius. ~/nextflow is the Nextflow launcher.
+SLURM_SETUP='module purge
+module load 2025 BCFtools/1.22-GCC-14.2.0 Java/21.0.7 R/4.5.1-gfbf-2025a R-bundle-CRAN/2025.10-foss-2025a SciPy-bundle/2025.06-gfbf-2025a matplotlib/3.10.3-gfbf-2025a
+export PATH="${HOME}:${PATH}"
+export NXF_SINGULARITY_CACHEDIR=/projects/0/<group>/<you>/singularity_cache'
+
+# ── Nextflow ──────────────────────────────────────────────────────────────────
+NXF_VER=""
+NXF_CONFIG="<path to this repo>/examples/snellius/nextflow_snellius.config"
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+VERBOSE=false
+KEEP_WORK=false

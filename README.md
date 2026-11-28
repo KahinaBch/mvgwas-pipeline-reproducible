@@ -193,7 +193,12 @@ Options:
 - Runs `nextflow run mvgwas.nf` per chromosome with the following parameters:
   `--geno`, `--pheno`, `--cov`, `--dir`, `--out`, `--l` (chunk size), `--t` (transformation), `--i` (interaction), `--ng` (min individuals)
 - **Local mode:** runs up to `LOCAL_PARALLEL` (default: 4) chromosomes in parallel
-- **SLURM mode:** submits a job array (1–22) and a dependent merge job
+- **SLURM mode:** submits, per stratum, a job array (1–22) and a dependent merge job, plus one job that
+  runs steps IV–VI after all merges succeed. `run.sh` exits after submitting; no second call is needed
+  (the submitted job IDs are in `OUTPUT_DIR/.slurm_pending` until step IV starts)
+- Each chromosome job starts Nextflow in its own folder (`chr_results*/chrN/`), so concurrent runs do not clash
+- mvgwas-nf tests a variant only if all three genotype groups have ≥ `MIN_INDIVIDUALS` samples
+  (and ≤ 5 % missing genotypes) — in practice a MAF filter of roughly √(`MIN_INDIVIDUALS`/N)
 - Merges all chromosome results (header once + data rows)
 - Performs merge QC: chromosome completeness, variant counts, column validation
 
@@ -202,7 +207,9 @@ Options:
 - Annotates rsIDs using `bcftools annotate` against a local or remote dbSNP VCF
   - **GRCh38:** `GCF_000001405.40.gz` (NCBI FTP)
   - **GRCh37:** `GCF_000001405.25.gz` (NCBI FTP)
-  - Set `DBSNP_VCF` in your config to use a local file (much faster)
+  - Set `DBSNP_VCF` in your config to use a local file (much faster, and required where
+    the node running step IV has no internet). Contigs may be `1..22` or NCBI-style (`NC_000001.11`)
+  - `scripts/make_dbsnp_subset.sh` builds a small local file with only the positions step IV needs
 - Generates:
   - **Manhattan plot** — full genome, coloured by chromosome, labelled top SNPs
   - **QQ plot** — observed vs. expected −log₁₀(P) with lambda GC
@@ -311,15 +318,61 @@ SLURM_TIME="24:00:00"         # wall-time per chromosome job
 SLURM_MEM="32G"               # memory per chromosome job
 SLURM_CPUS=4                  # CPUs per chromosome job
 SLURM_MAIL=""                 # email for failure notifications (empty = off)
-SLURM_EXTRA_ARGS=""           # any extra #SBATCH directives (e.g. --account=...)
+SLURM_EXTRA_ARGS=""           # extra "#SBATCH ..." line(s) (e.g. #SBATCH --account=...)
 
 # === SLURM — merge job (submitted with afterok dependency) ===
 SLURM_MERGE_TIME="02:00:00"   # wall-time for the merge step
 SLURM_MERGE_MEM="16G"         # memory for the merge step
 SLURM_MERGE_CPUS=2            # CPUs for the merge step
+
+# === SLURM — steps IV-VI job (after all merge jobs) ===
+SLURM_POST_TIME="04:00:00"
+SLURM_POST_MEM="16G"
+SLURM_POST_CPUS=4
+
+# === Commands run at the start of every submitted job (module loads, PATH) ===
+SLURM_SETUP=""
 ```
 
 The chromosome job array is built automatically from the `CHROMOSOMES` variable, so setting e.g. `CHROMOSOMES="1 2 3"` will submit `--array=1,2,3` rather than the full 1–22.
+
+Generated job scripts are self-contained (paths and settings are written into them, and
+`SLURM_SETUP` runs first), because on some clusters — e.g. Snellius — jobs submitted from inside
+a job do not inherit its environment.
+
+---
+
+## Running on Snellius (SURF) / HPC without internet on compute nodes
+
+`examples/snellius/` contains a launcher, an example config and a Nextflow override that were used
+to reproduce the ALFA regional-WMH sex-stratified analysis (merged results byte-identical to the
+original run) and to run its AMYPAD replication:
+
+```bash
+cp examples/snellius/snellius.conf.example my.conf      # edit the <...> paths
+bash   examples/snellius/run_snellius.sh check my.conf  # login node: steps I-II
+sbatch examples/snellius/run_snellius.sh run   my.conf --skip-test
+# after step III, on the login node (internet access), for the rsIDs of step IV:
+bash scripts/make_dbsnp_subset.sh /path/dbsnp_top1000.vcf.gz 1000 OUT/results{,_female,_male}/mvgwas_merged.tsv
+```
+
+Points that matter there:
+- **Home quota is 1M files** — put `OUTPUT_DIR` on project space (Nextflow writes ~10 files per chunk).
+- **No internet on compute nodes** — set `DBSNP_VCF` to a local file (see `scripts/make_dbsnp_subset.sh`;
+  remote region queries from Snellius are ~1 KB/s, a full download of dbSNP ~8 min).
+- **Modules** — put them in `SLURM_SETUP`; the launcher and every submitted job run it.
+- **Billing** — genoa jobs are charged for at least 24 CPUs.
+
+### Verifying a reproduction
+
+Compare the merged results with checksums from an earlier run (one `<md5> <stratum>` line per stratum):
+
+```bash
+bash examples/snellius/run_snellius.sh compare my.conf expected_md5.txt
+# IDENTICAL  combined: OUT/results/mvgwas_merged.tsv
+# IDENTICAL  male:     OUT/results_male/mvgwas_merged.tsv
+# IDENTICAL  female:   OUT/results_female/mvgwas_merged.tsv
+```
 
 ---
 
@@ -371,11 +424,14 @@ bash run.sh --config my_run.conf --resume
 
 `--resume` skips any step whose checkpoint file already exists under `OUTPUT_DIR/.checkpoints/`.
 
-To re-run only post-processing and the report:
+To re-run only post-processing, enrichment and the report:
 
 ```bash
-bash run.sh --config my_run.conf --steps 4,5 --resume
+bash run.sh --config my_run.conf --steps 4,5,6 --resume
 ```
+
+With `--resume`, the run metadata and `run_stats.tsv` from earlier steps are kept (appended to), so
+later steps still know the strata and per-stratum inputs.
 
 ---
 
@@ -410,7 +466,10 @@ bash run.sh --config my_run.conf --steps 4,5 --resume
 | VCF index missing | Automatically recreated by the pipeline; or run `tabix -p vcf your.vcf.gz` manually |
 | Java 8 detected | Auto-handled (NXF_VER=22.04.0); or upgrade Java |
 | SLURM jobs queued forever | Check `SLURM_PARTITION` in config |
-| rsID annotation slow | Set `DBSNP_VCF` to a local pre-downloaded dbSNP file |
+| rsID annotation slow, hangs, or all rsIDs empty | Set `DBSNP_VCF` to a local file (`scripts/make_dbsnp_subset.sh`); compute nodes often have no internet |
+| `Disk quota exceeded` / `Unable to create file .command.run` | File-count quota reached: move `OUTPUT_DIR` to project/scratch space |
+| `OUTPUT_DIR: unbound variable` in a SLURM job | Jobs do not inherit the environment on your cluster: put module loads in `SLURM_SETUP` (job scripts already contain all paths) |
+| Steps IV–VI never ran in SLURM mode | A chromosome or merge job failed (`afterok` dependency): check `logs/chr_*`/`merge_*`, fix, then `bash run.sh --config ... --resume` |
 | Missing chromosome result | Check `logs/chrN.log` for that chromosome |
 | Regional plot missing gene track | UCSC API may be unavailable; plot is still generated without genes |
 

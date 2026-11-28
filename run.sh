@@ -63,9 +63,9 @@ while [[ $# -gt 0 ]]; do
         --resume)    RESUME=true;           shift   ;;
         --dry-run)   DRY_RUN=true;          shift   ;;
         --verbose)           VERBOSE=true;          shift   ;;
-        --sex-stratified)    SEX_STRATIFIED=true;   shift   ;;
-        --skip-enrichment)   SKIP_ENRICHMENT=true;  shift   ;;
-        --no-enrichment)     SKIP_ENRICHMENT=true;  shift   ;;
+        --sex-stratified)    _CLI_SEX_STRATIFIED=true;   shift   ;;
+        --skip-enrichment)   _CLI_SKIP_ENRICHMENT=true;  shift   ;;
+        --no-enrichment)     _CLI_SKIP_ENRICHMENT=true;  shift   ;;
         --help|-h)
             grep '^#' "${BASH_SOURCE[0]}" | head -40 | sed 's/^# \{0,1\}//'
             exit 0
@@ -80,12 +80,20 @@ if [ ! -f "${CONFIG_FILE}" ]; then
     echo "Copy config.conf.template to config.conf and fill in the paths."
     exit 1
 fi
+CONFIG_FILE="$(cd "$(dirname "${CONFIG_FILE}")" && pwd)/$(basename "${CONFIG_FILE}")"
+# Export every config value: the step scripts run as child processes and
+# would otherwise not see OUTPUT_DIR, PIPELINE_DIR, USE_SLURM, ... at all.
+set -a
 # shellcheck source=config.conf.template
 source "${CONFIG_FILE}"
+set +a
 
-# Apply overrides
+# Apply overrides (command-line flags win over the config file)
 [ -n "${BUILD_OVERRIDE}" ] && GENOME_BUILD="${BUILD_OVERRIDE}"
-export DRY_RUN VERBOSE SEX_STRATIFIED SKIP_ENRICHMENT
+[ "${_CLI_SEX_STRATIFIED:-false}" = "true" ] && SEX_STRATIFIED=true
+[ "${_CLI_SKIP_ENRICHMENT:-false}" = "true" ] && SKIP_ENRICHMENT=true
+export DRY_RUN VERBOSE SEX_STRATIFIED SKIP_ENRICHMENT GENOME_BUILD
+export CONFIG_FILE STEPS_TO_RUN BUILD_OVERRIDE
 
 # ── Validate mandatory config keys ───────────────────────────────────────────
 _check_config() {
@@ -192,7 +200,7 @@ fi
 # Read STRATA from metadata written by Step II (default: combined)
 META_FILE="${OUTPUT_DIR}/${RUN_NAME}_run_metadata.txt"
 if [ -f "${META_FILE}" ]; then
-    _STRATA_VAL=$(grep "^STRATA=" "${META_FILE}" | tail -1 | cut -d= -f2-)
+    _STRATA_VAL=$(grep "^STRATA=" "${META_FILE}" | tail -1 | cut -d= -f2- || true)
     [ -n "${_STRATA_VAL}" ] && STRATA="${_STRATA_VAL}"
     # Export all metadata keys so subscripts can resolve stratum-specific paths
     while IFS='=' read -r _K _V; do
@@ -206,8 +214,17 @@ log_info "Active strata: ${STRATA}"
 # ── STEP III: Pipeline execution and output QC ────────────────────────────────
 if should_run_step 3; then
     log_step 3 "mvgwas-nf execution (chromosome-parallel) and output QC"
+    rm -f "${OUTPUT_DIR}/.slurm_pending"
     bash "${SCRIPT_DIR}/scripts/03_run_pipeline.sh"
-    # Merge is called from inside 03_run_pipeline.sh after all chr jobs finish
+    # SLURM mode: step 3 only *submits* the chromosome + merge jobs and a
+    # dependent job that runs the remaining steps. Stop here instead of
+    # starting step 4 on results that do not exist yet.
+    if [ -f "${OUTPUT_DIR}/.slurm_pending" ]; then
+        log_milestone "Step III submitted to SLURM — remaining steps are queued (see ${OUTPUT_DIR}/.slurm_pending)"
+        record_stat "step3_submitted" "$(date '+%Y-%m-%d %H:%M:%S')"
+        exit 0
+    fi
+    # Local mode: merge is called from inside 03_run_pipeline.sh after all chr jobs finish
     checkpoint_set 3
     log_milestone "Step III complete — GWAS complete, results merged and QC'd"
     record_stat "step3_completed" "$(date '+%Y-%m-%d %H:%M:%S')"

@@ -40,8 +40,19 @@ else
         DBSNP_SOURCE="https://ftp.ncbi.nih.gov/snp/latest_release/VCF/GCF_000001405.40.gz" || \
         DBSNP_SOURCE="https://ftp.ncbi.nih.gov/snp/latest_release/VCF/GCF_000001405.25.gz"
     log_warn "  DBSNP_VCF not set. Falling back to remote: ${DBSNP_SOURCE}"
-    log_warn "  Set DBSNP_VCF in your config for faster annotation."
+    log_warn "  This needs internet access on the node running step 4 (often absent on"
+    log_warn "  HPC compute nodes) and is slow. Set DBSNP_VCF to a local copy or to a"
+    log_warn "  subset made with scripts/make_dbsnp_subset.sh."
 fi
+
+# NCBI dbSNP names contigs NC_0000NN.v; our VCFs use 1..22. Build a map from
+# the dbSNP index (empty if dbSNP already uses 1..22 / chr1..chr22).
+DBSNP_CHR_MAP="${OUTPUT_DIR}/.dbsnp_chr_map.tsv"
+_TIMEOUT=""; command -v timeout >/dev/null 2>&1 && _TIMEOUT="timeout 300"
+( cd "${LOGS_DIR}" && ${_TIMEOUT} tabix -l "${DBSNP_SOURCE}" 2>/dev/null ) \
+    | awk '$1 ~ /^NC_0000[0-9][0-9]\./ {k=substr($1,8,2)+0; if(k==23)k="X"; if(k==24)k="Y"; print k"\t"$1}' \
+    > "${DBSNP_CHR_MAP}" || true
+[ -s "${DBSNP_CHR_MAP}" ] && log_info "  dbSNP uses NCBI contig names — mapping 1..22 to NC_0000xx for annotation"
 
 # =============================================================================
 # Per-stratum loop: 4A top SNPs → 4B rsID annotation → 4C plots
@@ -136,8 +147,10 @@ elif [ "${DRY_RUN}" = "false" ] && [ -f "${TOP_SNPS}" ]; then
         printf "##fileformat=VCFv4.1\n"
         printf "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
         awk -v chr="${CHR_COL}" -v pos="${POS_COL}" -v ref="${REF_COL:-0}" \
-            -v alt="${ALT_COL:-0}" 'NR>1 {
-            c = $chr; sub(/^chr/, "", c)
+            -v alt="${ALT_COL:-0}" -v mapf="${DBSNP_CHR_MAP}" '
+        BEGIN { while ((getline l < mapf) > 0) { split(l, f, "\t"); m[f[1]] = f[2] } }
+        NR>1 {
+            c = $chr; sub(/^chr/, "", c); if (c in m) c = m[c]
             r = (ref>0) ? $ref : "."
             a = (alt>0) ? $alt : "."
             printf "%s\t%s\t.\t%s\t%s\t.\t.\t.\n", c, $pos, r, a
@@ -151,14 +164,17 @@ elif [ "${DRY_RUN}" = "false" ] && [ -f "${TOP_SNPS}" ]; then
     bcftools annotate \
         -a "${DBSNP_SOURCE}" \
         -c ID \
-        --regions-file <(awk 'NR>1{print $1"\t"$2"\t"$2}' "${TOP_SNPS}" | sort -k1,1 -k2,2n) \
+        --regions-file <(bcftools query -f '%CHROM\t%POS\t%POS\n' "${TMP_VCF}.gz") \
         "${TMP_VCF}.gz" \
         -Oz -o "${TMP_ANNOTATED}.gz" 2>> "${LOGS_DIR}/rsid_annotation.log"
     tabix -p vcf "${TMP_ANNOTATED}.gz"
 
     # ── Build a CHR:POS → rsID lookup table ──────────────────────────────────
     LOOKUP="${STRATUM_RESULTS_DIR}/.rsid_lookup.tsv"
-    bcftools query -f '%CHROM\t%POS\t%ID\n' "${TMP_ANNOTATED}.gz" > "${LOOKUP}"
+    bcftools query -f '%CHROM\t%POS\t%ID\n' "${TMP_ANNOTATED}.gz" \
+        | awk -F'\t' -v OFS='\t' -v mapf="${DBSNP_CHR_MAP}" '
+            BEGIN { while ((getline l < mapf) > 0) { split(l, f, "\t"); b[f[2]] = f[1] } }
+            { if ($1 in b) $1 = b[$1]; print }' > "${LOOKUP}"
 
     # ── Join rsIDs back to top SNPs table ────────────────────────────────────
     log_info "  Joining rsIDs back to association table..."

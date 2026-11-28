@@ -86,8 +86,12 @@ CONTAINER="singularity"
 # GRCh37 or GRCh38
 GENOME_BUILD="GRCh38"
 
-# Path to a local dbSNP VCF (bgzipped + tabix-indexed).
-# If empty, the pipeline will query NCBI FTP remotely (slower but no download needed).
+# Path to a local dbSNP VCF (bgzipped + tabix-indexed), same build as the data.
+# Contigs may be 1..22 or NCBI-style (NC_000001.11, as in the NCBI files).
+# If empty, the pipeline queries NCBI remotely: this needs internet access on
+# the node running step 4 (usually absent on HPC compute nodes) and is very
+# slow. Recommended: scripts/make_dbsnp_subset.sh (small file with only the
+# positions step 4 looks up), run after step 3 on a machine with internet.
 #   GRCh38: https://ftp.ncbi.nih.gov/snp/latest_release/VCF/GCF_000001405.40.gz
 #   GRCh37: https://ftp.ncbi.nih.gov/snp/latest_release/VCF/GCF_000001405.25.gz
 DBSNP_VCF=""
@@ -163,12 +167,27 @@ SLURM_TIME="24:00:00"       # wall-time for each per-chromosome job
 SLURM_MEM="32G"            # memory per per-chromosome job
 SLURM_CPUS=4               # CPUs per per-chromosome job
 SLURM_MAIL=""              # email for job notifications (leave empty to disable)
-SLURM_EXTRA_ARGS=""        # any extra sbatch arguments for per-chromosome jobs
+SLURM_EXTRA_ARGS=""        # extra "#SBATCH ..." line(s) for per-chromosome jobs
 
 # Resources for the merge job (submitted after the array with afterok dependency)
 SLURM_MERGE_TIME="02:00:00"
 SLURM_MERGE_MEM="16G"
 SLURM_MERGE_CPUS=2
+
+# Resources for the job that runs steps 4-6 after all merge jobs succeed.
+# In SLURM mode run.sh stops after submitting step 3; this job is queued
+# automatically, so no second run.sh call is needed.
+SLURM_POST_TIME="04:00:00"
+SLURM_POST_MEM="16G"
+SLURM_POST_CPUS=4
+
+# Shell commands run at the start of every job the pipeline submits (module
+# loads, PATH, ...). Needed where jobs submitted from inside a job do not
+# inherit its environment (e.g. Snellius). Multi-line is fine, e.g.:
+#   SLURM_SETUP='module load 2025 BCFtools/1.22-GCC-14.2.0 R/4.5.1-gfbf-2025a
+#   export PATH="${HOME}:${PATH}"'
+# See examples/snellius/snellius.conf.example.
+SLURM_SETUP=""
 
 # ── Nextflow settings ─────────────────────────────────────────────────────────
 # Nextflow version to use (empty = use whatever is in PATH)
@@ -181,5 +200,7 @@ NXF_CONFIG=""
 # Print debug-level messages (true | false)
 VERBOSE=false
 
-# Keep per-chromosome Nextflow work directories after merge (true | false)
+# Keep per-chromosome Nextflow work directories (chr_results*/chrN/.nf_work)
+# after the chromosome finished (true | false). They hold ~10 files per
+# 500-variant chunk (100k+ files per stratum) and are deleted by default.
 KEEP_WORK=false
