@@ -5,7 +5,9 @@ An automated, reproducible pipeline wrapper for
 
 Performs six sequential steps: environment setup → input QC → chromosome-parallel GWAS
 execution → post-processing (top SNPs, rsID, Manhattan/QQ/Regional plots) →
-enrichment analysis (GWAS Catalog mapping + MAGMA gene/gene-set test) → report generation.
+enrichment analysis (GWAS Catalog mapping + MAGMA gene/gene-set test) → report generation,
+plus an optional seventh: a MANTA meta-analysis across cohorts from per-trait summary
+statistics (needs the mvgwas-nf branch `per-trait-stats`).
 
 ---
 ## Quick overview
@@ -151,11 +153,13 @@ Options:
   --config <file>          Path to configuration file (required)
   --skip-test              Skip Step I (environment test + pipeline self-test)
   --build <GRCh37|GRCh38>  Override genome build (also set in config)
-  --steps <1,2,3,4,5>      Run only specific steps (e.g. --steps 4,5)
+  --steps <1,...,7>        Run only specific steps (e.g. --steps 4,5; default 1-7)
   --resume                 Skip steps whose checkpoint already exists
   --dry-run                Print commands without executing them
   --verbose                Enable DEBUG-level logging
   --sex-stratified         Run sex-stratified analysis (male + female + combined)
+  --skip-enrichment        Skip Step V (GWAS Catalog + MAGMA)
+  --meta                   Run Step VII (MANTA meta-analysis over META_INPUTS)
   --help                   Print this help message
 ```
 
@@ -199,7 +203,12 @@ Options:
 - Each chromosome job starts Nextflow in its own folder (`chr_results*/chrN/`), so concurrent runs do not clash
 - mvgwas-nf tests a variant only if all three genotype groups have ≥ `MIN_INDIVIDUALS` samples
   (and ≤ 5 % missing genotypes) — in practice a MAF filter of roughly √(`MIN_INDIVIDUALS`/N)
-- Merges all chromosome results (header once + data rows)
+- With `PER_TRAIT_STATS=true` (default; mvgwas-nf `--pt true`) each row also carries `N`, `AF_ALT`,
+  `BETA_<trait>` and `SE_<trait>` per trait: the SNP effect (per ALT allele) and standard error of
+  `lm(trait ~ covariates + GT)`, i.e. the per-trait effects inside MANTA's model. The first nine
+  columns are unchanged; `PER_TRAIT_STATS=false` gives the original 9-column output
+- Merges all chromosome results (header once + data rows), then removes the per-chromosome copies
+  once the merge is complete (`KEEP_CHR_RESULTS=true` keeps them)
 - Performs merge QC: chromosome completeness, variant counts, column validation
 
 ### Step IV — Post-Processing
@@ -214,6 +223,10 @@ Options:
   - **Manhattan plot** — full genome, coloured by chromosome, labelled top SNPs
   - **QQ plot** — observed vs. expected −log₁₀(P) with lambda GC
   - **Regional Manhattan** — ±`REGIONAL_WINDOW` bp around the top locus, with UCSC gene track
+- With per-trait columns: exports each stratum's summary statistics for meta-analysis
+  (`scripts/04b_meta_export.R`) to `meta/<stratum>/`: `<label>.mvsumstats.tsv.gz` (all BETA/SE,
+  marker `CHR:POS:A1:A2` with sorted alleles), `<label>.rescor.tsv` (residual trait correlation,
+  traits ~ covariates) and, with `META_WRITE_METAL=true`, one METAL input file + script per trait
 
 ### Step V — Enrichment Analysis *(on by default; skip with `--skip-enrichment`)*
 
@@ -240,6 +253,24 @@ Options:
 - Aggregates all intermediate results, QC reports, and statistics
 - Produces a comprehensive **Markdown** report (+ **HTML** via pandoc or built-in fallback)
 - Sections: executive summary, run config, step-by-step QC details, top loci table, embedded plots, full pipeline log tail
+
+### Step VII — MANTA meta-analysis across cohorts *(optional; `RUN_META=true` or `--meta`)*
+- Reads the Step IV exports of every cohort run listed in `META_INPUTS` (comma-separated
+  `OUTPUT_DIR`s; only summary files are read) and checks they share one genome build
+- Per stratum present in every cohort: aligns alleles, pools each trait's BETA by
+  inverse-variance weighting (as METAL `SCHEME STDERR`), pools the residual correlation R
+  weighted by N, and rebuilds MANTA's statistic on the pooled betas:
+  T = Σ β̄ⱼ², null distribution Σ λᵢ χ²₁ with λ = eigenvalues of D̄RD̄ (D̄ = pooled SEs)
+- Writes `meta_analysis/<stratum>/meta_manta.tsv.gz`: `P_manta_meta`, `P_wald_meta`
+  (MANOVA-type), and BETA/SE/P per trait, for variants tested in ≥ `META_MIN_COHORTS` cohorts
+- Fixed-effect: valid only if traits are on the same scale (same units and `TRANSFORMATION`)
+  in every cohort, core covariates are the same, cohorts are independent, alleles align
+  (A/T and C/G variants cannot be aligned by name) and `INTERACTION=none`. Check per-trait
+  heterogeneity (METAL I², `META_WRITE_METAL=true`) before interpreting a hit
+- Run it once all cohorts have finished Steps I–IV, e.g. as a separate job:
+  `bash run.sh --config cohortB.conf --steps 7 --meta --resume`
+- `scripts/run_metausat.R` adds metaMANOVA / metaUSAT (Ray & Boehnke 2018) from the same
+  files as a sensitivity check (needs `metaUSAT_v1.17.R`)
 
 ---
 
@@ -357,7 +388,12 @@ bash scripts/make_dbsnp_subset.sh /path/dbsnp_top1000.vcf.gz 1000 OUT/results{,_
 ```
 
 Points that matter there:
-- **Home quota is 1M files** — put `OUTPUT_DIR` on project space (Nextflow writes ~10 files per chunk).
+- **Home quota is 1M files** — never put `OUTPUT_DIR` in home (Nextflow writes ~10 files per chunk).
+- **Output size** — with per-trait statistics (30 traits) the merged file is ~1.3 KB per variant,
+  ~15–20 GB for a sex-stratified run of ~5M variants: run on `/scratch-shared` (8 TiB quota) and copy
+  the final files to project space, which is shared and fills up.
+- **Step VII** — run it as its own job with more memory once all cohorts are done:
+  `sbatch --mem=64G --time=12:00:00 examples/snellius/run_snellius.sh run my.conf --steps 7 --meta`.
 - **No internet on compute nodes** — set `DBSNP_VCF` to a local file (see `scripts/make_dbsnp_subset.sh`;
   remote region queries from Snellius are ~1 KB/s, a full download of dbSNP ~8 min).
 - **Modules** — put them in `SLURM_SETUP`; the launcher and every submitted job run it.

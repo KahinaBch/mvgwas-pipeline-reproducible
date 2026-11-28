@@ -6,6 +6,9 @@
 # AMYPAD replication. Replace the <...> paths, then:
 #   bash   examples/snellius/run_snellius.sh check my.conf
 #   sbatch examples/snellius/run_snellius.sh run   my.conf --skip-test
+# Meta-analysis (Step VII), once every cohort in META_INPUTS has finished
+# Steps I-IV, as a separate job with more memory:
+#   sbatch --mem=64G --time=12:00:00 examples/snellius/run_snellius.sh run my.conf --steps 7 --meta
 # =============================================================================
 
 RUN_NAME="my_mvgwas_run"
@@ -17,13 +20,18 @@ COVARIATE_FILE="<path>/covariates.tsv"
 GENO_FORMAT="vcf"
 PLINK_PREFIX=""
 
-# ── Output: on project space, NOT home (home is limited to 1M files) ─────────
-OUTPUT_DIR="/projects/0/<group>/<you>/<run>/output"
+# ── Output: NOT home (home is limited to 1M files). With per-trait statistics
+#    a sex-stratified run of ~5M variants writes ~15-20 GB: use scratch
+#    (8 TiB quota) and copy the final files to project space afterwards.
+OUTPUT_DIR="/scratch-shared/<you>/<run>/output"
 
-# ── mvgwas-nf clone (KahinaBch/mvgwas-nf, branch dsl2-conversion) ────────────
-PIPELINE_DIR="${HOME}/mvgwas-nf"
+# ── mvgwas-nf clone (KahinaBch/mvgwas-nf). per-trait-stats adds the --pt option
+#    (needed for PER_TRAIT_STATS=true); dsl2-conversion gives the original
+#    9-column output. A git worktree keeps both side by side:
+#      cd ~/mvgwas-nf && git worktree add ~/mvgwas-nf-pt per-trait-stats
+PIPELINE_DIR="${HOME}/mvgwas-nf-pt"
 PIPELINE_REPO=""
-PIPELINE_BRANCH="dsl2-conversion"
+PIPELINE_BRANCH="per-trait-stats"
 
 # ── mvgwas-nf parameters ──────────────────────────────────────────────────────
 CHUNK_SIZE=500
@@ -33,6 +41,17 @@ INTERACTION="none"
 # people: an implicit MAF filter of roughly sqrt(MIN_INDIVIDUALS / N).
 MIN_INDIVIDUALS=10
 CHROMOSOMES="1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22"
+
+# ── Per-trait statistics and meta-analysis export (Step IV) ───────────────────
+PER_TRAIT_STATS=true      # N, AF_ALT, BETA_<trait>, SE_<trait> in the output
+META_COHORT_LABEL=""      # label in meta/ file names (default: RUN_NAME)
+META_WRITE_METAL=false    # true = also one METAL file per trait (large)
+KEEP_CHR_RESULTS=false    # per-chromosome copies are removed after the merge
+
+# ── Step VII: MANTA meta-analysis (off here; run it as a separate job) ───────
+RUN_META=false
+META_INPUTS="<OUTPUT_DIR of cohort A>,<OUTPUT_DIR of cohort B>"
+META_MIN_COHORTS=2
 
 # ── Sex stratification (combined + male + female) ─────────────────────────────
 SEX_STRATIFIED=true
@@ -81,7 +100,7 @@ SLURM_MERGE_TIME="02:00:00"
 SLURM_MERGE_MEM="16G"
 SLURM_MERGE_CPUS=2
 SLURM_POST_TIME="04:00:00"
-SLURM_POST_MEM="16G"
+SLURM_POST_MEM="32G"      # Step IV reads the merged file (~6 GB with per-trait columns)
 SLURM_POST_CPUS=4
 
 # Run at the start of every SLURM job the pipeline submits (and by
@@ -90,7 +109,7 @@ SLURM_POST_CPUS=4
 SLURM_SETUP='module purge
 module load 2025 BCFtools/1.22-GCC-14.2.0 Java/21.0.7 R/4.5.1-gfbf-2025a R-bundle-CRAN/2025.10-foss-2025a SciPy-bundle/2025.06-gfbf-2025a matplotlib/3.10.3-gfbf-2025a
 export PATH="${HOME}:${PATH}"
-export NXF_SINGULARITY_CACHEDIR=/projects/0/<group>/<you>/singularity_cache'
+export NXF_SINGULARITY_CACHEDIR=/scratch-shared/<you>/singularity_cache'
 
 # ── Nextflow ──────────────────────────────────────────────────────────────────
 NXF_VER=""

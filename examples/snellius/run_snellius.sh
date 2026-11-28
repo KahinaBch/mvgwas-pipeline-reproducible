@@ -34,11 +34,14 @@ set -euo pipefail
 usage() { sed -n '5,14p' "${SELF:-$0}" | sed 's/^# \{0,1\}//'; exit 2; }
 
 MODE="${1:-}"; CONF="${2:-}"
-# Under sbatch this file runs from a spooled copy: ask SLURM for the real path.
-if [ -n "${SLURM_JOB_ID:-}" ] && command -v scontrol >/dev/null 2>&1; then
+SELF="${BASH_SOURCE[0]}"
+# Submitted with sbatch, this file runs from a spooled copy (no repo next to it):
+# then ask SLURM for the real path. Called with bash (also inside another job),
+# its own location is used.
+if [ ! -f "$(dirname "${SELF}")/../../run.sh" ] && [ -n "${SLURM_JOB_ID:-}" ] \
+   && command -v scontrol >/dev/null 2>&1; then
     SELF=$(scontrol show job "${SLURM_JOB_ID}" | sed -n 's/^ *Command=\([^ ]*\).*/\1/p')
 fi
-SELF="${SELF:-${BASH_SOURCE[0]}}"
 REPO="${MVGWAS_REPO:-$(cd "$(dirname "${SELF}")/../.." && pwd)}"
 [ -f "${REPO}/run.sh" ] || { echo "ERROR: run.sh not found in ${REPO}; set MVGWAS_REPO" >&2; exit 1; }
 [ -n "${MODE}" ] && [ -f "${CONF}" ] || usage

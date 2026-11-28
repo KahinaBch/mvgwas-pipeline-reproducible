@@ -121,6 +121,8 @@ build_nxf_cmd() {
     local chr="$1" pheno="$2" cov="$3" chr_results_base="$4"
     local chr_vcf="${CHR_VCF_DIR}/chr${chr}.vcf.gz"
     local chr_out="${chr_results_base}/chr${chr}"
+    local pt_flag="--pt true"
+    if [ "${PER_TRAIT_STATS:-true}" = "false" ]; then pt_flag="--pt false"; fi
     mkdir -p "${chr_out}"
     echo "${NXF_PREFIX}nextflow run ${PIPELINE_DIR}/mvgwas.nf" \
         "--geno ${chr_vcf}" \
@@ -132,6 +134,7 @@ build_nxf_cmd() {
         "--t ${TRANSFORMATION:-none}" \
         "--i ${INTERACTION:-none}" \
         "--ng ${MIN_INDIVIDUALS:-10}" \
+        "${pt_flag}" \
         "${NXF_CONTAINER_FLAG}" \
         "${NXF_CONFIG_ARG}" \
         "-work-dir ${chr_out}/.nf_work" \
@@ -229,6 +232,7 @@ set -eo pipefail
 export OUTPUT_DIR="${OUTPUT_DIR}" RUN_NAME="${RUN_NAME}" DRY_RUN="${DRY_RUN}" VERBOSE="${VERBOSE}"
 export CHROMOSOMES="${CHROMOSOMES:-1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22}"
 export PVAL_COL="${PVAL_COL:-P_manta}" PIPELINE_LOG="${PIPELINE_LOG}"
+export KEEP_CHR_RESULTS="${KEEP_CHR_RESULTS:-false}"
 export STRATUM_LABEL="${STRATUM}"
 export STRATUM_CHR_RESULTS_DIR="${CHR_RESULTS_DIR_STR}"
 export STRATUM_RESULTS_DIR="${RESULTS_DIR_STR}"
@@ -318,6 +322,7 @@ if [ ${#SLURM_SUBMITTED_JOBS[@]} -gt 0 ]; then
         [ "${SKIP_ENRICHMENT:-false}" = "true" ] && POST_FLAGS="${POST_FLAGS} --skip-enrichment"
         [ "${VERBOSE:-false}" = "true" ]         && POST_FLAGS="${POST_FLAGS} --verbose"
         [ -n "${BUILD_OVERRIDE:-}" ]             && POST_FLAGS="${POST_FLAGS} --build ${BUILD_OVERRIDE}"
+        [ "${RUN_META:-false}" = "true" ]        && POST_FLAGS="${POST_FLAGS} --meta"
         POST_SCRIPT="${LOGS_DIR}/slurm_post_steps.sh"
         cat > "${POST_SCRIPT}" <<EOPOST
 #!/bin/bash

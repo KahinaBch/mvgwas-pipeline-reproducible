@@ -178,6 +178,18 @@ if [ "${DRY_RUN}" = "false" ]; then
         echo "TOTAL_ASSOCIATIONS_${STRATUM_UC}=${TOTAL_ROWS}" >> "${META}"
     fi
 
+    # ── Per-chromosome copies: remove once the merge is complete ──────────────
+    # They duplicate the merged file (with per-trait statistics each copy is as
+    # large as the merged file). KEEP_CHR_RESULTS=true keeps them.
+    if [ "${KEEP_CHR_RESULTS:-false}" != "true" ]; then
+        if [ "${N_MISSING}" -eq 0 ] && [ $(( N_TOTAL_LINES - 1 )) -eq "${TOTAL_ROWS}" ]; then
+            for CHR in "${PRESENT_CHRS[@]}"; do rm -f "${CHR_FILE[$CHR]}"; done
+            log_info "  Per-chromosome result files removed (merge complete; KEEP_CHR_RESULTS=false)"
+        else
+            log_warn "  Per-chromosome result files kept: merge incomplete (${N_MISSING} chromosome(s) missing)"
+        fi
+    fi
+
     log_milestone "Step III [${STRATUM_LABEL}] complete — merged results: ${MERGED}"
 else
     log_info "  [DRY-RUN] Would merge ${N_PRESENT} chromosome files → ${MERGED}"

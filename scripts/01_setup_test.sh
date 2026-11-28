@@ -125,7 +125,7 @@ fi
 # =============================================================================
 log_section "${LOG_SECTION_PREFIX} R package checks"
 
-R_PACKAGES=(data.table ggplot2 ggrepel scales cowplot jsonlite optparse)
+R_PACKAGES=(data.table ggplot2 ggrepel scales cowplot jsonlite optparse CompQuadForm)
 MISSING_R=()
 for pkg in "${R_PACKAGES[@]}"; do
     if Rscript -e "if (!requireNamespace('${pkg}', quietly=TRUE)) quit(status=1)" 2>/dev/null; then

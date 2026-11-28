@@ -11,6 +11,8 @@
 #   V.   Enrichment analysis: GWAS Catalog mapping + MAGMA gene/gene-set test
 #          (runs by default; skip with --skip-enrichment or SKIP_ENRICHMENT=true)
 #   VI.  Comprehensive final report
+#   VII. MANTA meta-analysis across cohorts (optional; RUN_META=true or --meta)
+#          reads the finished cohort runs listed in META_INPUTS
 #
 # Usage:
 #   bash run.sh --config <config.conf> [options]
@@ -25,12 +27,14 @@
 #   --verbose                   Enable debug-level logging
 #   --skip-enrichment           Skip Step V (GWAS Catalog + MAGMA)
 #   --sex-stratified            Run sex-stratified analysis (male/female/combined)
+#   --meta                      Run Step VII (MANTA meta-analysis over META_INPUTS)
 #   --help                      Show this message and exit
 #
 # Examples:
 #   bash run.sh --config my_run.conf
 #   bash run.sh --config my_run.conf --skip-test --resume
 #   bash run.sh --config my_run.conf --steps 4,5 --build GRCh38
+#   bash run.sh --config amypad.conf --steps 7 --meta --resume   # once ALFA and AMYPAD are done
 # =============================================================================
 set -euo pipefail
 
@@ -47,7 +51,7 @@ source "${SCRIPT_DIR}/lib/utils.sh"
 CONFIG_FILE="${SCRIPT_DIR}/config.conf"
 SKIP_TEST=false
 BUILD_OVERRIDE=""
-STEPS_TO_RUN="1,2,3,4,5,6"
+STEPS_TO_RUN="1,2,3,4,5,6,7"
 RESUME=false
 DRY_RUN=false
 VERBOSE=false
@@ -62,10 +66,11 @@ while [[ $# -gt 0 ]]; do
         --steps)     STEPS_TO_RUN="$2";     shift 2 ;;
         --resume)    RESUME=true;           shift   ;;
         --dry-run)   DRY_RUN=true;          shift   ;;
-        --verbose)           VERBOSE=true;          shift   ;;
-        --sex-stratified)    _CLI_SEX_STRATIFIED=true;   shift   ;;
-        --skip-enrichment)   _CLI_SKIP_ENRICHMENT=true;  shift   ;;
-        --no-enrichment)     _CLI_SKIP_ENRICHMENT=true;  shift   ;;
+        --verbose)           CLI_VERBOSE=true;          shift   ;;
+        --sex-stratified)    CLI_SEX_STRATIFIED=true;   shift   ;;
+        --skip-enrichment)   CLI_SKIP_ENRICHMENT=true;  shift   ;;
+        --no-enrichment)     CLI_SKIP_ENRICHMENT=true;  shift   ;;
+        --meta)              RUN_META_CLI=true;         shift   ;;
         --help|-h)
             grep '^#' "${BASH_SOURCE[0]}" | head -40 | sed 's/^# \{0,1\}//'
             exit 0
@@ -81,17 +86,29 @@ if [ ! -f "${CONFIG_FILE}" ]; then
     exit 1
 fi
 CONFIG_FILE="$(cd "$(dirname "${CONFIG_FILE}")" && pwd)/$(basename "${CONFIG_FILE}")"
-# Export every config value: the step scripts run as child processes and
-# would otherwise not see OUTPUT_DIR, PIPELINE_DIR, USE_SLURM, ... at all.
+# Every variable the config sets is exported (set -a), so the step scripts
+# (scripts/0*.sh, run as child processes) see the user's settings rather than
+# their built-in defaults.
 set -a
 # shellcheck source=config.conf.template
 source "${CONFIG_FILE}"
 set +a
+# An empty NXF_VER would otherwise reach the Nextflow launcher as a set variable
+[ -z "${NXF_VER:-}" ] && unset NXF_VER
 
-# Apply overrides (command-line flags win over the config file)
+# Apply overrides: command-line flags take precedence over the config file
 [ -n "${BUILD_OVERRIDE}" ] && GENOME_BUILD="${BUILD_OVERRIDE}"
-[ "${_CLI_SEX_STRATIFIED:-false}" = "true" ] && SEX_STRATIFIED=true
-[ "${_CLI_SKIP_ENRICHMENT:-false}" = "true" ] && SKIP_ENRICHMENT=true
+[ "${CLI_VERBOSE:-false}" = "true" ]         && VERBOSE=true
+[ "${CLI_SEX_STRATIFIED:-false}" = "true" ]  && SEX_STRATIFIED=true
+[ "${CLI_SKIP_ENRICHMENT:-false}" = "true" ] && SKIP_ENRICHMENT=true
+[ "${RUN_META_CLI:-false}" = "true" ]        && RUN_META=true
+# Per-trait statistics and meta-analysis settings are read by sub-scripts
+PER_TRAIT_STATS="${PER_TRAIT_STATS:-true}"
+META_WRITE_METAL="${META_WRITE_METAL:-false}"
+KEEP_CHR_RESULTS="${KEEP_CHR_RESULTS:-false}"
+RUN_META="${RUN_META:-false}"
+export PER_TRAIT_STATS META_COHORT_LABEL META_WRITE_METAL KEEP_CHR_RESULTS
+export RUN_META META_INPUTS META_MIN_COHORTS
 export DRY_RUN VERBOSE SEX_STRATIFIED SKIP_ENRICHMENT GENOME_BUILD
 export CONFIG_FILE STEPS_TO_RUN BUILD_OVERRIDE
 
@@ -234,6 +251,33 @@ fi
 if should_run_step 4; then
     log_step 4 "Top-SNP extraction, rsID annotation, and visualisation"
     bash "${SCRIPT_DIR}/scripts/04_postprocess.sh"
+    # Per-trait export for meta-analysis (needs PER_TRAIT_STATS=true in Step III, the default)
+    if [ "${PER_TRAIT_STATS:-true}" = "true" ]; then
+        read -ra STRATA_ARR_IV <<< "${STRATA:-combined}"
+        for STRATUM in "${STRATA_ARR_IV[@]}"; do
+            if [ "${STRATUM}" = "combined" ]; then
+                _RES="${OUTPUT_DIR}/results"
+                _PH="${PHENOTYPE_FILTERED:-${OUTPUT_DIR}/inputs/phenotype_filtered.tsv}"
+                _CV="${COVARIATE_FILTERED:-${OUTPUT_DIR}/inputs/covariate_filtered.tsv}"
+                _LBL="${META_COHORT_LABEL:-${RUN_NAME}}"
+            else
+                _RES="${OUTPUT_DIR}/results_${STRATUM}"
+                _PH="${OUTPUT_DIR}/inputs/phenotype_${STRATUM}.tsv"
+                _CV="${OUTPUT_DIR}/inputs/covariate_${STRATUM}.tsv"
+                _LBL="${META_COHORT_LABEL:-${RUN_NAME}}_${STRATUM}"
+            fi
+            log_info "  Exporting per-trait summary statistics for meta-analysis [${STRATUM}]"
+            Rscript "${SCRIPT_DIR}/scripts/04b_meta_export.R" \
+                --merged    "${_RES}/mvgwas_merged.tsv" \
+                --pheno     "${_PH}" \
+                --cov       "${_CV}" \
+                --transform "${TRANSFORMATION:-none}" \
+                --cohort    "${_LBL}" \
+                --out-dir   "${OUTPUT_DIR}/meta/${STRATUM}" \
+                --metal     "${META_WRITE_METAL:-false}" \
+                || log_warn "  Meta-analysis export failed for stratum ${STRATUM}"
+        done
+    fi
     checkpoint_set 4
     log_milestone "Step IV complete — top SNPs annotated, plots generated"
     record_stat "step4_completed" "$(date '+%Y-%m-%d %H:%M:%S')"
@@ -314,6 +358,19 @@ if should_run_step 6; then
     record_stat "step6_completed" "$(date '+%Y-%m-%d %H:%M:%S')"
 fi
 
+# ── STEP VII: MANTA meta-analysis across cohorts (optional) ──────────────────
+if should_run_step 7; then
+    if [ "${RUN_META:-false}" != "true" ]; then
+        log_debug "Step 7 skipped: RUN_META is not true (set it in the config or pass --meta)."
+    else
+        log_step 7 "MANTA meta-analysis across cohorts"
+        bash "${SCRIPT_DIR}/scripts/07_meta_analysis.sh"
+        checkpoint_set 7
+        log_milestone "Step VII complete — meta-analysis written to ${OUTPUT_DIR}/meta_analysis/"
+        record_stat "step7_completed" "$(date '+%Y-%m-%d %H:%M:%S')"
+    fi
+fi
+
 # ── Final summary ─────────────────────────────────────────────────────────────
 record_stat "end_time"    "$(date '+%Y-%m-%d %H:%M:%S')"
 record_stat "elapsed"     "$(elapsed)"
@@ -323,6 +380,7 @@ log_info "Results    : ${OUTPUT_DIR}/"
 log_info "Report     : ${OUTPUT_DIR}/${RUN_NAME}_report.md"
 log_info "GWAS Cat.  : ${OUTPUT_DIR}/gwas_catalog/"
 log_info "MAGMA      : ${OUTPUT_DIR}/magma/"
+[ "${RUN_META:-false}" = "true" ] && log_info "Meta       : ${OUTPUT_DIR}/meta_analysis/"
 log_info "Log        : ${PIPELINE_LOG}"
 log_info ""
 log_ok "All done."
