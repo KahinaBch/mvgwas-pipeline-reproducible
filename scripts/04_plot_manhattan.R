@@ -127,7 +127,8 @@ if (!is.null(label_col)) {
 # Plot 1: Manhattan
 # =============================================================================
 cat("[INFO] Generating Manhattan plot...\n")
-dt[, chr_col := factor(CHR %% 2, labels=c("even","odd"))]
+# levels given explicitly: a run on one chromosome (CHROMOSOMES="22") has only one parity
+dt[, chr_col := factor(CHR %% 2, levels=c(0, 1), labels=c("even","odd"))]
 
 p_mht <- ggplot(dt, aes(x=gpos, y=LOGP, color=chr_col)) +
   geom_point(size=0.4, alpha=0.7, show.legend=FALSE) +
